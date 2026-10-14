@@ -124,6 +124,8 @@ class OfflineAgents:
         best_score, best_idx, best_sentence = 0.0, 0, ""
         for i, p in enumerate(passages, 1):
             for sentence in re.split(r"(?<=[.!?])\s+|\n", p.text):
+                if sentence.lstrip().startswith("#"):
+                    continue  # headings name a topic, they don't answer anything
                 score = len(q & set(tokenize(sentence))) / (len(q) or 1)
                 if score > best_score:
                     best_score, best_idx, best_sentence = score, i, sentence.strip()
