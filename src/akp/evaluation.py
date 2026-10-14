@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -51,7 +52,8 @@ class EvalRecord(BaseModel):
     citations: list[Passage]
     search_queries: list[str]
     trace_id: str | None
-    verdict: Verdict
+    verdict: Verdict | None = None
+    error: str | None = None
 
 
 class HumanLabel(BaseModel):
@@ -115,47 +117,82 @@ async def run_eval(
     obs: Observability,
     run_name: str,
     concurrency: int = 4,
+    on_record: Callable[[EvalRecord], None] | None = None,
+    max_consecutive_errors: int = 3,
 ) -> list[EvalRecord]:
+    """Evaluates items concurrently. A failing item is recorded with its error instead
+    of aborting the run; after several failures in a row (typically an exhausted API
+    quota) the remaining items are skipped, so a later --resume picks them up."""
     semaphore = asyncio.Semaphore(concurrency)
+    consecutive_errors = 0
 
-    async def evaluate(item: EvalItem) -> EvalRecord:
+    async def evaluate(item: EvalItem) -> EvalRecord | None:
+        nonlocal consecutive_errors
         async with semaphore:
+            if consecutive_errors >= max_consecutive_errors:
+                return None
             trace_id, callbacks = obs.new_trace()
             config = {
                 "callbacks": callbacks,
                 "metadata": {"langfuse_session_id": run_name, "langfuse_tags": ["eval"]},
             }
-            state = await graph.ainvoke({"question": item.question}, {**config, "run_name": "ask"})
-            citations = state.get("citations", [])
-            verdict = await judge.grade(item, state["answer"], citations, config)
-            for criterion in CRITERIA:
-                obs.score(
-                    trace_id, f"judge_{criterion}", getattr(verdict, criterion), verdict.reasoning
+            try:
+                state = await graph.ainvoke(
+                    {"question": item.question}, {**config, "run_name": "ask"}
                 )
-            return EvalRecord(
-                item=item,
-                answer=state["answer"],
-                status=state["status"],
-                citations=citations,
-                search_queries=state.get("tried_queries", []),
-                trace_id=trace_id,
-                verdict=verdict,
-            )
+                citations = state.get("citations", [])
+                verdict = await judge.grade(item, state["answer"], citations, config)
+            except Exception as exc:  # noqa: BLE001 - recorded per item, run continues
+                consecutive_errors += 1
+                record = EvalRecord(
+                    item=item,
+                    answer="",
+                    status="error",
+                    citations=[],
+                    search_queries=[],
+                    trace_id=trace_id,
+                    error=f"{type(exc).__name__}: {str(exc)[:300]}",
+                )
+            else:
+                consecutive_errors = 0
+                for criterion in CRITERIA:
+                    obs.score(
+                        trace_id,
+                        f"judge_{criterion}",
+                        getattr(verdict, criterion),
+                        verdict.reasoning,
+                    )
+                record = EvalRecord(
+                    item=item,
+                    answer=state["answer"],
+                    status=state["status"],
+                    citations=citations,
+                    search_queries=state.get("tried_queries", []),
+                    trace_id=trace_id,
+                    verdict=verdict,
+                )
+            if on_record:
+                on_record(record)
+            return record
 
-    return list(await asyncio.gather(*(evaluate(i) for i in items)))
+    results = await asyncio.gather(*(evaluate(i) for i in items))
+    return [r for r in results if r is not None]
 
 
 def summarize(records: list[EvalRecord]) -> dict:
     def rate(rs: list[EvalRecord], criterion: str) -> float | None:
         return round(sum(getattr(r.verdict, criterion) for r in rs) / len(rs), 3) if rs else None
 
+    errors = [r for r in records if r.verdict is None]
+    records = [r for r in records if r.verdict is not None]
     answerable = [r for r in records if r.item.answerable]
     unanswerable = [r for r in records if not r.item.answerable]
     statuses: dict[str, int] = {}
     for r in records:
         statuses[r.status] = statuses.get(r.status, 0) + 1
     return {
-        "items": len(records),
+        "graded_items": len(records),
+        "errored_items": len(errors),
         "correct": rate(records, "correct"),
         "faithful": rate(records, "faithful"),
         "correct_on_answerable": rate(answerable, "correct"),
@@ -178,7 +215,7 @@ def cohen_kappa(pairs: list[tuple[bool, bool]]) -> float:
 
 def agreement(records: list[EvalRecord], labels: list[HumanLabel]) -> dict:
     by_id = {label.id: label for label in labels}
-    labelled = [r for r in records if r.item.id in by_id]
+    labelled = [r for r in records if r.item.id in by_id and r.verdict is not None]
     report: dict = {"labelled_items": len(labelled)}
     for criterion in CRITERIA:
         pairs = [
@@ -199,7 +236,13 @@ def agreement(records: list[EvalRecord], labels: list[HumanLabel]) -> dict:
 
 
 def read_records(path: Path) -> list[EvalRecord]:
-    return [EvalRecord.model_validate_json(line) for line in path.read_text().splitlines() if line]
+    """Records are appended as they finish; for a resumed item the latest one wins."""
+    latest: dict[str, EvalRecord] = {}
+    for line in path.read_text().splitlines():
+        if line:
+            record = EvalRecord.model_validate_json(line)
+            latest[record.item.id] = record
+    return list(latest.values())
 
 
 def labels_path_for(run_path: Path) -> Path:
@@ -225,16 +268,26 @@ async def _run(args: argparse.Namespace) -> None:
     graph = build_eval_graph(settings, obs)
     real = settings.llm_provider != "offline"
     judge: Judge = LLMJudge(settings, obs) if real else HeuristicJudge()
-    items = load_items()[: args.limit]
-    run_name = f"{datetime.now():%Y%m%d-%H%M%S}-{settings.llm_provider}"
+    if args.resume:
+        run_path = Path(args.resume)
+        done = {r.item.id for r in read_records(run_path) if r.verdict is not None}
+    else:
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        run_path = RUNS_DIR / f"{datetime.now():%Y%m%d-%H%M%S}-{settings.llm_provider}.jsonl"
+        done = set()
+    items = [i for i in load_items() if i.id not in done][: args.limit]
+    print(f"{len(done)} already graded, running {len(items)}")
 
-    records = await run_eval(items, graph, judge, obs, run_name, args.concurrency)
+    with run_path.open("a") as out:
+
+        def persist(record: EvalRecord) -> None:
+            out.write(record.model_dump_json() + "\n")
+            out.flush()
+
+        await run_eval(items, graph, judge, obs, run_path.stem, args.concurrency, persist)
     obs.flush()
 
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    run_path = RUNS_DIR / f"{run_name}.jsonl"
-    run_path.write_text("".join(r.model_dump_json() + "\n" for r in records))
-    summary = summarize(records)
+    summary = summarize(read_records(run_path))
     run_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     print(f"\nrun written to {run_path}")
@@ -255,7 +308,7 @@ def _label(args: argparse.Namespace) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     done = {label.id for label in read_labels(out)}
     obs = Observability.from_settings(get_settings())
-    todo = [r for r in read_records(run_path) if r.item.id not in done]
+    todo = [r for r in read_records(run_path) if r.verdict and r.item.id not in done]
     print(f"{len(done)} labelled, {len(todo)} to go. Answer y/n, q to stop.\n")
     for r in todo:
         print("=" * 80)
@@ -292,6 +345,7 @@ def main() -> None:
     run = sub.add_parser("run", help="answer and judge the dataset")
     run.add_argument("--limit", type=int, default=None)
     run.add_argument("--concurrency", type=int, default=4)
+    run.add_argument("--resume", metavar="RUN.jsonl", help="continue a run, retrying failures")
     sub.add_parser("label", help="label a run's answers by hand").add_argument("run")
     sub.add_parser("agreement", help="judge vs human agreement").add_argument("run")
     args = parser.parse_args()
