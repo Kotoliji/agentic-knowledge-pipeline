@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -10,6 +11,7 @@ from google.genai.errors import APIError as GoogleAPIError
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 from langgraph.errors import NodeTimeoutError
 from nats.errors import Error as NatsError
+from prometheus_client import make_asgi_app
 from pydantic import BaseModel, Field
 
 from akp.agents import Agents, make_agents
@@ -17,6 +19,7 @@ from akp.checkpoints import open_checkpointer
 from akp.config import Settings, get_settings
 from akp.graph import Status, build_graph, passages_of
 from akp.ingestion import IngestAccepted, IngestPublisher, IngestRequest
+from akp.metrics import ASK_ERRORS, ASK_REQUESTS, ASK_SECONDS
 from akp.observability import Observability
 from akp.retrieval import (
     DocumentInfo,
@@ -98,6 +101,7 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
             obs.flush()
 
     app = FastAPI(title="Agentic Knowledge Pipeline", lifespan=lifespan)
+    app.mount("/metrics", make_asgi_app())
 
     @app.exception_handler(RunFailed)
     async def run_failed(request: Request, exc: RunFailed) -> JSONResponse:
@@ -125,12 +129,18 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
             "run_name": "ask",
             "configurable": {"thread_id": thread_id},
         }
+        started = time.perf_counter()
         try:
             state = await request.app.state.graph.ainvoke(graph_input, config)
         except _PROVIDER_ERRORS as exc:
+            ASK_ERRORS.labels("llm_provider").inc()
             raise RunFailed(exc, thread_id, 502, "LLM provider error") from exc
         except NodeTimeoutError as exc:
+            ASK_ERRORS.labels("llm_timeout").inc()
             raise RunFailed(exc, thread_id, 504, "LLM did not respond in time") from exc
+        finally:
+            ASK_SECONDS.observe(time.perf_counter() - started)
+        ASK_REQUESTS.labels(state["status"]).inc()
         return AskResponse(
             answer=state["answer"],
             status=state["status"],

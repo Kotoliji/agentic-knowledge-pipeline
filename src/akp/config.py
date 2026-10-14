@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     retrieval_backend: Literal["local", "grpc"] = "local"
     retrieval_grpc_target: str = "localhost:50051"
     grpc_port: int = 50051
+    # Prometheus endpoint for the processes without an HTTP server (0 = off).
+    metrics_port: int = 0
 
     qdrant_url: str = ":memory:"
     collection: str = "documents"

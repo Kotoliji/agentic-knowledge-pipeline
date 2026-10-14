@@ -24,6 +24,7 @@ from nats.js.errors import BadRequestError
 from pydantic import BaseModel, Field, ValidationError
 
 from akp.config import Settings, get_settings
+from akp.metrics import INGEST_MESSAGES, INGEST_PENDING
 from akp.retrieval import DocumentStore
 
 log = logging.getLogger(__name__)
@@ -130,9 +131,12 @@ async def run_worker(settings: Settings, store, stop: asyncio.Event) -> None:
             try:
                 messages = await sub.fetch(batch=10, timeout=1)
             except NatsTimeout:
+                INGEST_PENDING.set((await sub.consumer_info()).num_pending)
                 continue
             for msg in messages:
-                await handle(msg, store, js, settings.ingest_max_deliver)
+                outcome = await handle(msg, store, js, settings.ingest_max_deliver)
+                INGEST_MESSAGES.labels(outcome).inc()
+            INGEST_PENDING.set((await sub.consumer_info()).num_pending)
     finally:
         await nc.drain()
 
@@ -151,4 +155,8 @@ def main() -> None:
                 asyncio.get_running_loop().add_signal_handler(sig, stop.set)
         await run_worker(settings, store, stop)
 
+    if settings.metrics_port:
+        from prometheus_client import start_http_server
+
+        start_http_server(settings.metrics_port)
     asyncio.run(run())

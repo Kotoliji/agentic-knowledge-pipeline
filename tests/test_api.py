@@ -55,3 +55,10 @@ def test_document_lifecycle(client):
 
     assert client.delete(f"/documents/{doc_id}").status_code == 204
     assert client.delete(f"/documents/{doc_id}").status_code == 404
+
+
+def test_metrics_count_answers_by_status(client):
+    client.post("/ask", json={"question": "How long does each on-call rotation last?"})
+    body = client.get("/metrics/").text
+    assert 'akp_ask_requests_total{status="answered"}' in body
+    assert "akp_ask_seconds_bucket" in body

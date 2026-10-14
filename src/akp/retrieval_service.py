@@ -11,6 +11,7 @@ import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from akp.config import Settings, get_settings
+from akp.metrics import observed_rpc
 from akp.retrieval import DocumentInfo, DocumentStore, IngestResult, Passage, load_directory
 from akp.rpc import retrieval_pb2 as pb
 from akp.rpc import retrieval_pb2_grpc as pb_grpc
@@ -26,6 +27,7 @@ class RetrievalServicer(pb_grpc.RetrievalServiceServicer):
         self.store = store
         self.default_top_k = default_top_k
 
+    @observed_rpc
     def Search(self, request, context):
         query = request.query.strip()
         if not query:
@@ -35,16 +37,19 @@ class RetrievalServicer(pb_grpc.RetrievalServiceServicer):
         passages = self.store.search(query, request.top_k or self.default_top_k)
         return pb.SearchResponse(passages=[pb.Passage(**p.model_dump()) for p in passages])
 
+    @observed_rpc
     def UpsertDocument(self, request, context):
         if not request.title.strip() or not request.text.strip():
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "title and text are required")
         result = self.store.upsert_document(request.title, request.text)
         return pb.UpsertDocumentResponse(**result.model_dump())
 
+    @observed_rpc
     def ListDocuments(self, request, context):
         docs = self.store.list_documents()
         return pb.ListDocumentsResponse(documents=[pb.DocumentInfo(**d.model_dump()) for d in docs])
 
+    @observed_rpc
     def DeleteDocument(self, request, context):
         if not self.store.delete_document(request.doc_id):
             context.abort(grpc.StatusCode.NOT_FOUND, f"document {request.doc_id} not found")
@@ -152,6 +157,10 @@ def main() -> None:
         load_directory(store, settings.seed_corpus_dir)
     server, port = create_server(store, settings, f"0.0.0.0:{settings.grpc_port}")
     server.start()
+    if settings.metrics_port:
+        from prometheus_client import start_http_server
+
+        start_http_server(settings.metrics_port)
     log.info("retrieval service listening on :%d", port)
     server.wait_for_termination()
 

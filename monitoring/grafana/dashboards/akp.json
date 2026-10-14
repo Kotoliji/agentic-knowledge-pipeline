@@ -1,0 +1,61 @@
+{
+  "uid": "akp-overview",
+  "title": "Agentic Knowledge Pipeline",
+  "schemaVersion": 39,
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "/ask runs per minute by outcome",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(akp_ask_requests_total{job=\"api\"}[5m])) * 60", "legendFormat": "{{status}}" },
+        { "refId": "B", "expr": "sum by (kind) (rate(akp_ask_errors_total{job=\"api\"}[5m])) * 60", "legendFormat": "error: {{kind}}" }
+      ]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "/ask latency (p50 / p95)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(akp_ask_seconds_bucket{job=\"api\"}[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(akp_ask_seconds_bucket{job=\"api\"}[5m])))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Retrieval service: p95 latency by gRPC method",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, method) (rate(akp_retrieval_seconds_bucket{job=\"retrieval\"}[5m])))", "legendFormat": "{{method}}" }
+      ]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Retrieval service: calls per minute by status code",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (method, code) (rate(akp_retrieval_requests_total{job=\"retrieval\"}[5m])) * 60", "legendFormat": "{{method}} {{code}}" }
+      ]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Ingestion: messages per minute by outcome",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(akp_ingest_messages_total{job=\"ingest-worker\"}[5m])) * 60", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Ingestion: queue lag (pending messages)",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "akp_ingest_pending{job=\"ingest-worker\"}", "legendFormat": "pending" }
+      ]
+    }
+  ]
+}

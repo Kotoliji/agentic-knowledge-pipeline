@@ -128,3 +128,20 @@ def test_api_returns_503_when_retrieval_service_is_down():
     )
     with TestClient(create_app(settings)) as api:
         assert api.get("/documents").status_code == 503
+
+
+def test_grpc_metrics_record_codes(client):
+    from prometheus_client import REGISTRY
+
+    def count(code):
+        value = REGISTRY.get_sample_value(
+            "akp_retrieval_requests_total", {"method": "Search", "code": code}
+        )
+        return value or 0
+
+    ok, bad = count("OK"), count("INVALID_ARGUMENT")
+    client.search("hotel", 2)
+    with pytest.raises(ValueError):
+        client.search("   ", 2)
+    assert count("OK") == ok + 1
+    assert count("INVALID_ARGUMENT") == bad + 1
