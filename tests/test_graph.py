@@ -18,7 +18,7 @@ async def test_answers_with_citation_from_the_right_document(loaded_store, setti
     state = await ask(graph, "What is the hotel limit per night in London?")
     assert state["status"] == "answered"
     assert "220 EUR" in state["answer"]
-    assert [c.title for c in state["citations"]] == ["Expense Policy"]
+    assert [c["title"] for c in state["citations"]] == ["Expense Policy"]
 
 
 async def test_question_outside_the_documents_is_not_answered(loaded_store, settings):
@@ -33,7 +33,7 @@ async def test_small_talk_skips_retrieval(loaded_store, settings):
     graph = make_graph(OfflineAgents(), loaded_store, settings)
     state = await ask(graph, "hi")
     assert state["status"] == "direct"
-    assert "passages" not in state
+    assert state["passages"] == [] and state["tried_queries"] == []
 
 
 class ScriptedAgents(OfflineAgents):
@@ -81,8 +81,8 @@ async def test_out_of_range_citations_are_not_trusted(loaded_store, settings):
 
     graph = make_graph(HallucinatedCitations(), loaded_store, settings)
     state = await ask(graph, "What is the hotel limit per night in London?")
-    assert state["draft"].citations == []
-    assert state["draft"].answerable is False
+    assert state["draft"]["citations"] == []
+    assert state["draft"]["answerable"] is False
     assert state["status"] == "insufficient_evidence"
 
 

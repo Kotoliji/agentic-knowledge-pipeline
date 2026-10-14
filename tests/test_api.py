@@ -18,6 +18,7 @@ def test_health(client):
         "status": "ok",
         "llm_provider": "offline",
         "tracing": False,
+        "checkpointer": "memory",
     }
 
 

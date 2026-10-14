@@ -12,6 +12,15 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    # Redis 8 ships the JSON and search modules the LangGraph checkpointer needs.
+    image: redis:8.10-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   retrieval:
     build: .
     image: akp:latest
@@ -50,10 +59,14 @@ services:
       RETRIEVAL_BACKEND: grpc
       RETRIEVAL_GRPC_TARGET: retrieval:50051
       SEED_CORPUS_DIR: ""
+      CHECKPOINTER: redis
+      REDIS_URL: redis://redis:6379
     ports:
       - "8000:8000"
     depends_on:
       retrieval:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:

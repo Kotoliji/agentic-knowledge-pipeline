@@ -1,5 +1,6 @@
 import logging
-from contextlib import asynccontextmanager
+import uuid
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import anthropic
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -10,8 +11,9 @@ from langgraph.errors import NodeTimeoutError
 from pydantic import BaseModel, Field
 
 from akp.agents import Agents, make_agents
+from akp.checkpoints import open_checkpointer
 from akp.config import Settings, get_settings
-from akp.graph import Status, build_graph
+from akp.graph import Status, build_graph, passages_of
 from akp.observability import Observability
 from akp.retrieval import (
     DocumentInfo,
@@ -24,9 +26,12 @@ from akp.retrieval_service import RetrievalClient, RetrievalUnavailable
 
 log = logging.getLogger(__name__)
 
+ThreadId = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    thread_id: str | None = ThreadId
 
 
 class Citation(BaseModel):
@@ -41,6 +46,7 @@ class AskResponse(BaseModel):
     status: Status
     citations: list[Citation]
     search_queries: list[str]
+    thread_id: str
     trace_id: str | None = None
     trace_url: str | None = None
 
@@ -50,43 +56,82 @@ class DocumentIn(BaseModel):
     text: str = Field(min_length=1, max_length=200_000)
 
 
+class RunFailed(Exception):
+    """A graph run stopped on an error; carries what the client needs to resume it."""
+
+    def __init__(self, cause: Exception, thread_id: str, status_code: int, detail: str):
+        super().__init__(str(cause))
+        self.cause, self.thread_id = cause, thread_id
+        self.status_code, self.detail = status_code, detail
+
+
+_PROVIDER_ERRORS = (anthropic.APIError, GoogleAPIError, ChatGoogleGenerativeAIError)
+
+
 def create_app(settings: Settings | None = None, agents: Agents | None = None) -> FastAPI:
     settings = settings or get_settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if settings.retrieval_backend == "grpc":
-            store = RetrievalClient(settings.retrieval_grpc_target, settings.retrieval_timeout_s)
-        else:
-            store = DocumentStore.from_settings(settings)
-            if settings.seed_corpus_dir:
-                load_directory(store, settings.seed_corpus_dir)
-        retriever = PassageRetriever(backend=store, k=settings.top_k)
-        obs = Observability.from_settings(settings)
-        app.state.store = store
-        app.state.obs = obs
-        app.state.graph = build_graph(agents or make_agents(settings, obs), retriever, settings)
-        yield
-        obs.flush()
+        async with AsyncExitStack() as stack:
+            if settings.retrieval_backend == "grpc":
+                store = RetrievalClient(
+                    settings.retrieval_grpc_target, settings.retrieval_timeout_s
+                )
+            else:
+                store = DocumentStore.from_settings(settings)
+                if settings.seed_corpus_dir:
+                    load_directory(store, settings.seed_corpus_dir)
+            retriever = PassageRetriever(backend=store, k=settings.top_k)
+            obs = Observability.from_settings(settings)
+            checkpointer = await open_checkpointer(settings, stack)
+            app.state.store = store
+            app.state.obs = obs
+            app.state.resumable = checkpointer is not None
+            app.state.graph = build_graph(
+                agents or make_agents(settings, obs), retriever, settings, checkpointer
+            )
+            yield
+            obs.flush()
 
     app = FastAPI(title="Agentic Knowledge Pipeline", lifespan=lifespan)
 
-    async def llm_unavailable(request: Request, exc: Exception) -> JSONResponse:
-        log.warning("LLM provider error: %s", exc)
-        return JSONResponse(status_code=502, content={"detail": "LLM provider error"})
-
-    for provider_error in (anthropic.APIError, GoogleAPIError, ChatGoogleGenerativeAIError):
-        app.add_exception_handler(provider_error, llm_unavailable)
+    @app.exception_handler(RunFailed)
+    async def run_failed(request: Request, exc: RunFailed) -> JSONResponse:
+        log.warning("run %s failed: %r", exc.thread_id, exc.cause)
+        content = {"detail": exc.detail, "thread_id": exc.thread_id}
+        if request.app.state.resumable:
+            content["resume"] = f"/ask/{exc.thread_id}/resume"
+        return JSONResponse(status_code=exc.status_code, content=content)
 
     @app.exception_handler(RetrievalUnavailable)
     async def retrieval_unavailable(request: Request, exc: RetrievalUnavailable) -> JSONResponse:
         log.warning("retrieval service unavailable: %s", exc)
         return JSONResponse(status_code=503, content={"detail": "Retrieval service is unavailable"})
 
-    @app.exception_handler(NodeTimeoutError)
-    async def llm_timeout(request: Request, exc: NodeTimeoutError) -> JSONResponse:
-        log.warning("LLM step timed out: %s", exc)
-        return JSONResponse(status_code=504, content={"detail": "LLM did not respond in time"})
+    async def run_graph(request: Request, graph_input, thread_id: str) -> AskResponse:
+        obs: Observability = request.app.state.obs
+        trace_id, callbacks = obs.new_trace()
+        config = {
+            "callbacks": callbacks,
+            "run_name": "ask",
+            "configurable": {"thread_id": thread_id},
+        }
+        try:
+            state = await request.app.state.graph.ainvoke(graph_input, config)
+        except _PROVIDER_ERRORS as exc:
+            raise RunFailed(exc, thread_id, 502, "LLM provider error") from exc
+        except NodeTimeoutError as exc:
+            raise RunFailed(exc, thread_id, 504, "LLM did not respond in time") from exc
+        return AskResponse(
+            answer=state["answer"],
+            status=state["status"],
+            citations=[Citation(**c.model_dump()) for c in passages_of(state, "citations")],
+            search_queries=state.get("tried_queries", []),
+            thread_id=thread_id,
+            trace_id=trace_id,
+            trace_url=obs.trace_url(trace_id),
+        )
 
     @app.get("/health")
     def health() -> dict:
@@ -94,24 +139,27 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
             "status": "ok",
             "llm_provider": settings.llm_provider,
             "tracing": app.state.obs.enabled,
+            "checkpointer": settings.checkpointer,
         }
 
     @app.post("/ask", response_model=AskResponse)
     async def ask(body: AskRequest, request: Request) -> AskResponse:
-        obs: Observability = request.app.state.obs
-        trace_id, callbacks = obs.new_trace()
-        state = await request.app.state.graph.ainvoke(
-            {"question": body.question},
-            {"callbacks": callbacks, "run_name": "ask"},
+        thread_id = body.thread_id or uuid.uuid4().hex
+        return await run_graph(request, {"question": body.question}, thread_id)
+
+    @app.post("/ask/{thread_id}/resume", response_model=AskResponse)
+    async def resume(thread_id: str, request: Request) -> AskResponse:
+        """Continue a failed run from the step that failed; finished steps are not re-run."""
+        if not request.app.state.resumable:
+            raise HTTPException(status_code=404, detail="Checkpointing is disabled")
+        snapshot = await request.app.state.graph.aget_state(
+            {"configurable": {"thread_id": thread_id}}
         )
-        return AskResponse(
-            answer=state["answer"],
-            status=state["status"],
-            citations=[Citation(**c.model_dump()) for c in state.get("citations", [])],
-            search_queries=state.get("tried_queries", []),
-            trace_id=trace_id,
-            trace_url=obs.trace_url(trace_id),
-        )
+        if not snapshot.values:
+            raise HTTPException(status_code=404, detail="Unknown thread")
+        if not snapshot.next:
+            raise HTTPException(status_code=409, detail="This run already finished")
+        return await run_graph(request, None, thread_id)
 
     @app.post("/documents", response_model=IngestResult)
     def add_document(body: DocumentIn, request: Request, response: Response) -> IngestResult:

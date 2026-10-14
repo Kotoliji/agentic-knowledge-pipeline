@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     top_k: int = 4
 
+    # Graph state is saved after every step, so a failed run can be resumed.
+    checkpointer: Literal["none", "memory", "redis"] = "memory"
+    redis_url: str = "redis://localhost:6379"
+    checkpoint_ttl_minutes: int = 24 * 60
+
     max_retrieval_rounds: int = 2
     retrieval_timeout_s: float = 10.0
     seed_corpus_dir: str | None = None

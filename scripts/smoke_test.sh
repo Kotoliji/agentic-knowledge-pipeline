@@ -16,7 +16,13 @@ expect() {
 }
 
 curl -fsS "$API/health" && echo
-expect answered "$(ask 'How many days per week can I work remotely?')"
+answer=$(ask 'How many days per week can I work remotely?')
+expect answered "$answer"
+
+# The run was checkpointed in Redis: resuming a finished run is refused with 409.
+thread=$(echo "$answer" | sed 's/.*"thread_id":"\([^"]*\)".*/\1/')
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/ask/$thread/resume")
+[ "$code" = 409 ] && echo "ok: checkpoint found for $thread" || { echo "resume gave $code" >&2; exit 1; }
 expect insufficient_evidence "$(ask "What was the company's revenue last year?")"
 
 docker compose stop retrieval

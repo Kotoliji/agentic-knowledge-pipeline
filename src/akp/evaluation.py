@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from akp.agents import chat_model, format_passages, make_agents
 from akp.config import Settings, get_settings
-from akp.graph import build_graph
+from akp.graph import build_graph, passages_of
 from akp.observability import Observability
 from akp.retrieval import DocumentStore, Passage, PassageRetriever, load_directory, tokenize
 
@@ -149,7 +149,7 @@ async def run_eval(
                     state = await graph.ainvoke(
                         {"question": item.question}, {**config, "run_name": "ask"}
                     )
-                    citations = state.get("citations", [])
+                    citations = passages_of(state, "citations")
                     verdict = await judge.grade(item, state["answer"], citations, config)
             except Exception as exc:  # noqa: BLE001 - recorded per item, run continues
                 consecutive_errors += 1

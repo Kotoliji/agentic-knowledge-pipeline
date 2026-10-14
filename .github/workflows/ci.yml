@@ -8,6 +8,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis:8.10-alpine
+        ports:
+          - 6379:6379
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +41,7 @@ jobs:
       - name: Test
         env:
           AKP_TEST_FASTEMBED: "1"
+          AKP_TEST_REDIS_URL: redis://localhost:6379
         run: pytest -q
 
   compose:
