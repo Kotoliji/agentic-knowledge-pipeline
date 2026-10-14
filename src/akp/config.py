@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     top_k: int = 4
 
     max_retrieval_rounds: int = 2
+    retrieval_timeout_s: float = 10.0
     seed_corpus_dir: str | None = None
 
 
