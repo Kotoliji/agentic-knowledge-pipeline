@@ -5,8 +5,8 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import BaseModel, Field
 
-from akp import prompts
 from akp.config import Settings
+from akp.observability import Observability
 from akp.retrieval import Passage, tokenize
 
 
@@ -44,13 +44,13 @@ def format_passages(passages: list[Passage]) -> str:
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 
 
-def _chat_model(model: str, effort: str, max_tokens: int) -> ChatAnthropic:
+def _chat_model(settings: Settings, model: str, effort: str, max_tokens: int) -> ChatAnthropic:
     extra = {}
+    if settings.anthropic_api_key:
+        extra["api_key"] = settings.anthropic_api_key
     if model in _FALLBACK_MODELS:
-        extra = {
-            "betas": ["server-side-fallback-2026-07-01"],
-            "model_kwargs": {"fallbacks": "default"},
-        }
+        extra["betas"] = ["server-side-fallback-2026-07-01"]
+        extra["model_kwargs"] = {"fallbacks": "default"}
     return ChatAnthropic(
         model=model,
         max_tokens=max_tokens,
@@ -62,43 +62,44 @@ def _chat_model(model: str, effort: str, max_tokens: int) -> ChatAnthropic:
 
 
 class ClaudeAgents:
-    def __init__(self, settings: Settings):
-        router = _chat_model(settings.model_router, settings.effort_router, 8000)
-        answer = _chat_model(settings.model_answer, settings.effort_answer, 16000)
-        critic = _chat_model(settings.model_critic, settings.effort_critic, 8000)
+    def __init__(self, settings: Settings, observability: Observability | None = None):
+        self._obs = observability or Observability()
+        s = settings
+        router = _chat_model(s, s.model_router, s.effort_router, 8000)
+        answer = _chat_model(s, s.model_answer, s.effort_answer, 16000)
+        critic = _chat_model(s, s.model_critic, s.effort_critic, 8000)
         # json_schema = native structured outputs. The default ("function_calling")
         # forces tool_choice, which current models reject.
-        self._route = prompts.ROUTER | router.with_structured_output(
-            RouteDecision, method="json_schema"
-        )
-        self._draft = prompts.DRAFT | answer.with_structured_output(Draft, method="json_schema")
-        self._critique = prompts.CRITIC | critic.with_structured_output(
-            Critique, method="json_schema"
-        )
-        self._chat = prompts.CHAT | router | StrOutputParser()
+        self._router = router.with_structured_output(RouteDecision, method="json_schema")
+        self._drafter = answer.with_structured_output(Draft, method="json_schema")
+        self._critic = critic.with_structured_output(Critique, method="json_schema")
+        self._chatter = router | StrOutputParser()
+
+    async def _run(self, prompt_name: str, model, inputs: dict, run_name: str):
+        # Prompt is resolved per call (Langfuse caches it), so a new prompt version
+        # published in Langfuse takes effect without a redeploy.
+        chain = self._obs.prompt(prompt_name) | model
+        return await chain.ainvoke(inputs, {"run_name": run_name})
 
     async def route(self, question: str) -> RouteDecision:
-        return await self._route.ainvoke({"question": question}, {"run_name": "router"})
+        return await self._run("akp-router", self._router, {"question": question}, "router")
 
     async def draft(self, question: str, passages: list[Passage]) -> Draft:
-        return await self._draft.ainvoke(
-            {"question": question, "passages": format_passages(passages)}, {"run_name": "drafter"}
-        )
+        inputs = {"question": question, "passages": format_passages(passages)}
+        return await self._run("akp-draft", self._drafter, inputs, "drafter")
 
     async def critique(self, question: str, draft: Draft, passages: list[Passage]) -> Critique:
-        return await self._critique.ainvoke(
-            {
-                "question": question,
-                "passages": format_passages(passages),
-                "answer": draft.answer,
-                "citations": draft.citations,
-                "answerable": draft.answerable,
-            },
-            {"run_name": "critic"},
-        )
+        inputs = {
+            "question": question,
+            "passages": format_passages(passages),
+            "answer": draft.answer,
+            "citations": draft.citations,
+            "answerable": draft.answerable,
+        }
+        return await self._run("akp-critic", self._critic, inputs, "critic")
 
     async def chat(self, question: str) -> str:
-        return await self._chat.ainvoke({"question": question}, {"run_name": "chat"})
+        return await self._run("akp-chat", self._chatter, {"question": question}, "chat")
 
 
 _SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank", "help", "bye"}
@@ -146,7 +147,7 @@ class OfflineAgents:
         return "Hi! Ask me about company policies and processes — I answer with citations."
 
 
-def make_agents(settings: Settings) -> Agents:
+def make_agents(settings: Settings, observability: Observability | None = None) -> Agents:
     if settings.llm_provider == "anthropic":
-        return ClaudeAgents(settings)
+        return ClaudeAgents(settings, observability)
     return OfflineAgents()

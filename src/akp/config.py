@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,14 @@ class Settings(BaseSettings):
     # "offline" runs the whole graph with deterministic rule-based agents:
     # no API key, used by tests and CI.
     llm_provider: Literal["anthropic", "offline"] = "offline"
+    anthropic_api_key: SecretStr | None = None
+    environment: str = "development"
+
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_prompt_label: str = "production"
+
     model_router: str = "claude-opus-5-5"
     model_answer: str = "claude-opus-5-5"
     model_critic: str = "claude-opus-5-5"

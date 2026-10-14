@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from akp.agents import Agents, make_agents
 from akp.config import Settings, get_settings
 from akp.graph import Status, build_graph
+from akp.observability import Observability
 from akp.retrieval import (
     DocumentInfo,
     DocumentStore,
@@ -33,6 +34,8 @@ class AskResponse(BaseModel):
     status: Status
     citations: list[Citation]
     search_queries: list[str]
+    trace_id: str | None = None
+    trace_url: str | None = None
 
 
 class DocumentIn(BaseModel):
@@ -49,9 +52,12 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
         if settings.seed_corpus_dir:
             load_directory(store, settings.seed_corpus_dir)
         retriever = PassageRetriever(backend=store, k=settings.top_k)
+        obs = Observability.from_settings(settings)
         app.state.store = store
-        app.state.graph = build_graph(agents or make_agents(settings), retriever, settings)
+        app.state.obs = obs
+        app.state.graph = build_graph(agents or make_agents(settings, obs), retriever, settings)
         yield
+        obs.flush()
 
     app = FastAPI(title="Agentic Knowledge Pipeline", lifespan=lifespan)
 
@@ -61,16 +67,27 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok", "llm_provider": settings.llm_provider}
+        return {
+            "status": "ok",
+            "llm_provider": settings.llm_provider,
+            "tracing": app.state.obs.enabled,
+        }
 
     @app.post("/ask", response_model=AskResponse)
     async def ask(body: AskRequest, request: Request) -> AskResponse:
-        state = await request.app.state.graph.ainvoke({"question": body.question})
+        obs: Observability = request.app.state.obs
+        trace_id, callbacks = obs.new_trace()
+        state = await request.app.state.graph.ainvoke(
+            {"question": body.question},
+            {"callbacks": callbacks, "run_name": "ask"},
+        )
         return AskResponse(
             answer=state["answer"],
             status=state["status"],
             citations=[Citation(**c.model_dump()) for c in state.get("citations", [])],
             search_queries=state.get("tried_queries", []),
+            trace_id=trace_id,
+            trace_url=obs.trace_url(trace_id),
         )
 
     @app.post("/documents", response_model=IngestResult)

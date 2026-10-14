@@ -14,11 +14,17 @@ def client():
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok", "llm_provider": "offline"}
+    assert client.get("/health").json() == {
+        "status": "ok",
+        "llm_provider": "offline",
+        "tracing": False,
+    }
 
 
 def test_ask_returns_answer_with_citations(client):
-    body = client.post("/ask", json={"question": "How long does each on-call rotation last?"}).json()
+    body = client.post(
+        "/ask", json={"question": "How long does each on-call rotation last?"}
+    ).json()
     assert body["status"] == "answered"
     assert "one week" in body["answer"]
     assert body["citations"][0]["title"] == "On-Call Rotation"
