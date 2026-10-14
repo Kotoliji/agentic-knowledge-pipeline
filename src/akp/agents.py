@@ -70,8 +70,8 @@ def chat_model(settings: Settings, role: Role, max_tokens: int) -> BaseChatModel
         return ChatGoogleGenerativeAI(
             model=model,
             max_output_tokens=max_tokens,
-            max_retries=6,
-            timeout=120,
+            max_retries=2,
+            timeout=settings.llm_timeout_s,
             rate_limiter=limiter,
             **extra,
         )
@@ -87,7 +87,7 @@ def chat_model(settings: Settings, role: Role, max_tokens: int) -> BaseChatModel
         max_tokens=max_tokens,
         output_config={"effort": getattr(settings, f"effort_{role}")},
         max_retries=2,
-        default_request_timeout=120,
+        default_request_timeout=settings.llm_timeout_s,
         rate_limiter=limiter,
         **extra,
     )

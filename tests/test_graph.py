@@ -154,3 +154,39 @@ def test_per_role_model_override(settings):
     s = settings.model_copy(update={"llm_provider": "google", "model_judge": "gemini-x"})
     assert s.model_for("judge") == "gemini-x"
     assert s.model_for("answer") == "gemini-3.5-flash"
+
+
+async def test_a_hung_llm_step_is_cut_off_by_the_node_timeout(loaded_store, settings):
+    import asyncio
+    import time
+
+    from langgraph.errors import NodeTimeoutError
+
+    class HangingDrafter(OfflineAgents):
+        async def draft(self, question, passages):
+            await asyncio.sleep(60)
+
+    s = settings.model_copy(update={"llm_timeout_s": 0.2})
+    graph = make_graph(HangingDrafter(), loaded_store, s)
+    started = time.monotonic()
+    with pytest.raises(NodeTimeoutError):
+        await ask(graph, "What is the hotel limit per night in London?")
+    assert time.monotonic() - started < 5  # two attempts of 0.2 s, not 60 s
+
+
+async def test_unparseable_model_output_is_retried_once(loaded_store, settings):
+    from langchain_core.exceptions import OutputParserException
+
+    class FlakyRouter(OfflineAgents):
+        calls = 0
+
+        async def route(self, question):
+            FlakyRouter.calls += 1
+            if FlakyRouter.calls == 1:
+                raise OutputParserException("not valid JSON")
+            return await super().route(question)
+
+    graph = make_graph(FlakyRouter(), loaded_store, settings)
+    state = await ask(graph, "What is the hotel limit per night in London?")
+    assert FlakyRouter.calls == 2
+    assert state["status"] == "answered"

@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -64,6 +65,14 @@ class Observability:
 
         trace_id = self.client.create_trace_id()
         return trace_id, [CallbackHandler(trace_context={"trace_id": trace_id})]
+
+    def attributes(self, **attributes):
+        """Context manager tagging every span created inside it (session_id, tags...)."""
+        if not self.client:
+            return nullcontext()
+        from langfuse import propagate_attributes
+
+        return propagate_attributes(**attributes)
 
     def trace_url(self, trace_id: str | None) -> str | None:
         if not (self.client and trace_id):

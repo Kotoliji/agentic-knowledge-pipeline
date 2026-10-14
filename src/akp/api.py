@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from google.genai.errors import APIError as GoogleAPIError
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
+from langgraph.errors import NodeTimeoutError
 from pydantic import BaseModel, Field
 
 from akp.agents import Agents, make_agents
@@ -81,6 +82,11 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
     async def retrieval_unavailable(request: Request, exc: RetrievalUnavailable) -> JSONResponse:
         log.warning("retrieval service unavailable: %s", exc)
         return JSONResponse(status_code=503, content={"detail": "Retrieval service is unavailable"})
+
+    @app.exception_handler(NodeTimeoutError)
+    async def llm_timeout(request: Request, exc: NodeTimeoutError) -> JSONResponse:
+        log.warning("LLM step timed out: %s", exc)
+        return JSONResponse(status_code=504, content={"detail": "LLM did not respond in time"})
 
     @app.get("/health")
     def health() -> dict:

@@ -1,8 +1,10 @@
 from typing import Literal, TypedDict
 
+from langchain_core.exceptions import OutputParserException
 from langgraph.errors import NodeTimeoutError
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, RetryPolicy
+from pydantic import ValidationError
 
 from akp.agents import Agents, Critique, Draft
 from akp.config import Settings
@@ -97,9 +99,18 @@ def build_graph(agents: Agents, retriever: PassageRetriever, settings: Settings,
             return "rewrite_query"
         return "finalize"
 
-    llm_retry = RetryPolicy(max_attempts=2)
+    # The SDKs already retry transport errors (429/5xx). The graph adds what they
+    # can't: a hard per-step timeout, and one retry when the model returns output
+    # that doesn't parse into the schema. Retrying both layers on the same errors
+    # would multiply into very long stalls.
+    llm_step = {
+        "retry_policy": RetryPolicy(
+            max_attempts=2, retry_on=(NodeTimeoutError, OutputParserException, ValidationError)
+        ),
+        "timeout": settings.llm_timeout_s,
+    }
     graph = StateGraph(AgentState)
-    graph.add_node("route", route, retry_policy=llm_retry)
+    graph.add_node("route", route, **llm_step)
     graph.add_node(
         "retrieve",
         retrieve,
@@ -113,10 +124,10 @@ def build_graph(agents: Agents, retriever: PassageRetriever, settings: Settings,
         error_handler=retrieval_failed,
         destinations=("finalize",),
     )
-    graph.add_node("draft", draft, retry_policy=llm_retry)
-    graph.add_node("critic", critic, retry_policy=llm_retry)
+    graph.add_node("draft", draft, **llm_step)
+    graph.add_node("critic", critic, **llm_step)
     graph.add_node("rewrite_query", rewrite_query)
-    graph.add_node("direct", direct, retry_policy=llm_retry)
+    graph.add_node("direct", direct, **llm_step)
     graph.add_node("finalize", finalize)
 
     graph.add_edge(START, "route")

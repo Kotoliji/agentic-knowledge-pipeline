@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     # Client-side throttle, e.g. to stay inside a free-tier requests-per-minute quota.
     llm_requests_per_minute: float | None = None
+    # Hard wall-clock cap per LLM step, enforced by the graph on top of the SDK.
+    llm_timeout_s: float = 90.0
     environment: str = "development"
 
     langfuse_public_key: str | None = None

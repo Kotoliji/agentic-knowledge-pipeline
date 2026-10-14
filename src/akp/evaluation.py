@@ -71,6 +71,7 @@ class Judge(Protocol):
 class LLMJudge:
     def __init__(self, settings: Settings, observability: Observability):
         self._obs = observability
+        self._timeout_s = settings.llm_timeout_s
         model = chat_model(settings, "judge", 16000)
         self._model = model.with_structured_output(Verdict, method="json_schema")
 
@@ -83,7 +84,9 @@ class LLMJudge:
             "answer": answer,
             "passages": format_passages(citations),
         }
-        return await chain.ainvoke(inputs, {**config, "run_name": "judge"})
+        return await asyncio.wait_for(
+            chain.ainvoke(inputs, {**config, "run_name": "judge"}), self._timeout_s
+        )
 
 
 class HeuristicJudge:
@@ -132,16 +135,14 @@ async def run_eval(
             if consecutive_errors >= max_consecutive_errors:
                 return None
             trace_id, callbacks = obs.new_trace()
-            config = {
-                "callbacks": callbacks,
-                "metadata": {"langfuse_session_id": run_name, "langfuse_tags": ["eval"]},
-            }
+            config = {"callbacks": callbacks}
             try:
-                state = await graph.ainvoke(
-                    {"question": item.question}, {**config, "run_name": "ask"}
-                )
-                citations = state.get("citations", [])
-                verdict = await judge.grade(item, state["answer"], citations, config)
+                with obs.attributes(session_id=run_name, tags=["eval"]):
+                    state = await graph.ainvoke(
+                        {"question": item.question}, {**config, "run_name": "ask"}
+                    )
+                    citations = state.get("citations", [])
+                    verdict = await judge.grade(item, state["answer"], citations, config)
             except Exception as exc:  # noqa: BLE001 - recorded per item, run continues
                 consecutive_errors += 1
                 record = EvalRecord(
