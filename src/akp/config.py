@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     top_k: int = 4
 
+    # "sync": POST /documents stores directly. "nats": it queues to JetStream and
+    # answers 202; akp.ingest_worker stores the document.
+    ingestion: Literal["sync", "nats"] = "sync"
+    nats_url: str = "nats://localhost:4222"
+    ingest_max_deliver: int = 5
+    ingest_ack_wait_s: float = 30.0
+    ingest_dedup_window_s: float = 120.0
+
     # Graph state is saved after every step, so a failed run can be resumed.
     checkpointer: Literal["none", "memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379"

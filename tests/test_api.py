@@ -19,6 +19,7 @@ def test_health(client):
         "llm_provider": "offline",
         "tracing": False,
         "checkpointer": "memory",
+        "ingestion": "sync",
     }
 
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -8,12 +9,14 @@ from fastapi.responses import JSONResponse
 from google.genai.errors import APIError as GoogleAPIError
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 from langgraph.errors import NodeTimeoutError
+from nats.errors import Error as NatsError
 from pydantic import BaseModel, Field
 
 from akp.agents import Agents, make_agents
 from akp.checkpoints import open_checkpointer
 from akp.config import Settings, get_settings
 from akp.graph import Status, build_graph, passages_of
+from akp.ingestion import IngestAccepted, IngestPublisher, IngestRequest
 from akp.observability import Observability
 from akp.retrieval import (
     DocumentInfo,
@@ -51,11 +54,6 @@ class AskResponse(BaseModel):
     trace_url: str | None = None
 
 
-class DocumentIn(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    text: str = Field(min_length=1, max_length=200_000)
-
-
 class RunFailed(Exception):
     """A graph run stopped on an error; carries what the client needs to resume it."""
 
@@ -85,6 +83,11 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
             retriever = PassageRetriever(backend=store, k=settings.top_k)
             obs = Observability.from_settings(settings)
             checkpointer = await open_checkpointer(settings, stack)
+            publisher = None
+            if settings.ingestion == "nats":
+                publisher = await IngestPublisher.connect(settings)
+                stack.push_async_callback(publisher.close)
+            app.state.publisher = publisher
             app.state.store = store
             app.state.obs = obs
             app.state.resumable = checkpointer is not None
@@ -108,6 +111,11 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
     async def retrieval_unavailable(request: Request, exc: RetrievalUnavailable) -> JSONResponse:
         log.warning("retrieval service unavailable: %s", exc)
         return JSONResponse(status_code=503, content={"detail": "Retrieval service is unavailable"})
+
+    @app.exception_handler(NatsError)
+    async def queue_unavailable(request: Request, exc: NatsError) -> JSONResponse:
+        log.warning("ingestion queue unavailable: %r", exc)
+        return JSONResponse(status_code=503, content={"detail": "Ingestion queue is unavailable"})
 
     async def run_graph(request: Request, graph_input, thread_id: str) -> AskResponse:
         obs: Observability = request.app.state.obs
@@ -140,6 +148,7 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
             "llm_provider": settings.llm_provider,
             "tracing": app.state.obs.enabled,
             "checkpointer": settings.checkpointer,
+            "ingestion": settings.ingestion,
         }
 
     @app.post("/ask", response_model=AskResponse)
@@ -161,9 +170,20 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
             raise HTTPException(status_code=409, detail="This run already finished")
         return await run_graph(request, None, thread_id)
 
-    @app.post("/documents", response_model=IngestResult)
-    def add_document(body: DocumentIn, request: Request, response: Response) -> IngestResult:
-        result = request.app.state.store.upsert_document(body.title, body.text)
+    @app.post(
+        "/documents",
+        response_model=IngestResult | IngestAccepted,
+        responses={202: {"model": IngestAccepted, "description": "Queued for ingestion"}},
+    )
+    async def add_document(
+        body: IngestRequest, request: Request, response: Response
+    ) -> IngestResult | IngestAccepted:
+        if request.app.state.publisher:
+            response.status_code = 202
+            return await request.app.state.publisher.publish(body)
+        result = await asyncio.to_thread(
+            request.app.state.store.upsert_document, body.title, body.text
+        )
         response.status_code = 201 if result.created else 200
         return result
 

@@ -38,6 +38,21 @@ echo "ok: run $thread is checkpointed"
 
 expect insufficient_evidence "$(ask "What was the company's revenue last year?")"
 
+# Async ingestion: 202 at once, stored by the worker, a re-send is flagged as duplicate.
+title="Smoke test $(date +%s)"
+doc="{\"title\":\"$title\",\"text\":\"Visitors sign in at the front desk on floor 2.\"}"
+post_doc() {
+  curl -s -w ' %{http_code}' -X POST "$API/documents" -H 'content-type: application/json' -d "$doc"
+}
+case "$(post_doc)" in *'"duplicate":false'*' 202') echo "ok: queued" ;; *) fail "POST /documents was not queued" ;; esac
+case "$(post_doc)" in *'"duplicate":true'*' 202') echo "ok: duplicate detected" ;; *) fail "re-send not flagged as duplicate" ;; esac
+for _ in $(seq 1 30); do
+  curl -fsS "$API/documents" | grep -q "\"$title\"" && break
+  sleep 1
+done
+curl -fsS "$API/documents" | grep -q "\"$title\"" || fail "worker did not store the queued document"
+echo "ok: stored by the ingest worker"
+
 docker compose stop retrieval
 expect retrieval_failed "$(ask 'How many days per week can I work remotely?')"
 docker compose start retrieval

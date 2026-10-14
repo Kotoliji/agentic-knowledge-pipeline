@@ -21,6 +21,17 @@ services:
       timeout: 3s
       retries: 20
 
+  nats:
+    image: nats:2.15-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz?js-enabled-only=true"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   retrieval:
     build: .
     image: akp:latest
@@ -61,12 +72,16 @@ services:
       SEED_CORPUS_DIR: ""
       CHECKPOINTER: redis
       REDIS_URL: redis://redis:6379
+      INGESTION: nats
+      NATS_URL: nats://nats:4222
     ports:
       - "8000:8000"
     depends_on:
       retrieval:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      nats:
         condition: service_healthy
     healthcheck:
       test:
@@ -78,5 +93,18 @@ services:
       timeout: 5s
       retries: 20
 
+  ingest-worker:
+    image: akp:latest
+    command: ["python", "-m", "akp.ingest_worker"]
+    environment:
+      NATS_URL: nats://nats:4222
+      RETRIEVAL_GRPC_TARGET: retrieval:50051
+    depends_on:
+      nats:
+        condition: service_healthy
+      retrieval:
+        condition: service_healthy
+
 volumes:
   qdrant_data:
+  nats_data:

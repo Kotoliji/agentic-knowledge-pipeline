@@ -32,6 +32,10 @@ jobs:
       - name: Generated gRPC code matches the .proto
         run: sh scripts/gen_proto.sh && git diff --exit-code src/akp/rpc
 
+      - name: Start NATS with JetStream
+        # Service containers can't take a command, so run it directly.
+        run: docker run -d -p 4222:4222 nats:2.15-alpine -js
+
       - name: Cache embedding model
         uses: actions/cache@v5
         with:
@@ -42,6 +46,7 @@ jobs:
         env:
           AKP_TEST_FASTEMBED: "1"
           AKP_TEST_REDIS_URL: redis://localhost:6379
+          AKP_TEST_NATS_URL: nats://localhost:4222
         run: pytest -q
 
   compose:
