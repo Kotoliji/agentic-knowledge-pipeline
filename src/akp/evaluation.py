@@ -3,6 +3,7 @@
     python -m akp.evaluation run [--limit N]          # answer + judge the dataset
     python -m akp.evaluation label RUN.jsonl          # label the same answers yourself
     python -m akp.evaluation agreement RUN.jsonl      # judge vs human: agreement, kappa
+    python -m akp.evaluation retrieval                # embedders compared, no LLM calls
 
 Human labelling never shows the judge's verdict, so it can't anchor the labeller.
 """
@@ -26,6 +27,7 @@ from akp.retrieval import DocumentStore, Passage, PassageRetriever, load_directo
 
 EVAL_DIR = Path("evals")
 DATASET = EVAL_DIR / "dataset.jsonl"
+PARAPHRASES = EVAL_DIR / "retrieval_paraphrases.jsonl"
 RUNS_DIR = EVAL_DIR / "runs"
 LABELS_DIR = EVAL_DIR / "labels"
 CRITERIA = ("correct", "faithful")
@@ -37,6 +39,12 @@ class EvalItem(BaseModel):
     reference: str
     answerable: bool
     source: str | None = None
+
+
+class RetrievalItem(BaseModel):
+    id: str
+    question: str
+    source: str
 
 
 class Verdict(BaseModel):
@@ -203,6 +211,38 @@ def summarize(records: list[EvalRecord]) -> dict:
     }
 
 
+def load_retrieval_sets() -> dict[str, list[RetrievalItem]]:
+    """The answerable dataset questions (worded close to the documents) and a set of
+    paraphrases that deliberately avoid the documents' vocabulary."""
+    dataset = [
+        RetrievalItem(id=i.id, question=i.question, source=i.source)
+        for i in load_items()
+        if i.answerable and i.source
+    ]
+    paraphrases = [
+        RetrievalItem.model_validate_json(line)
+        for line in PARAPHRASES.read_text().splitlines()
+        if line
+    ]
+    return {"dataset": dataset, "paraphrases": paraphrases}
+
+
+def retrieval_metrics(store, items: list[RetrievalItem], k: int = 4, depth: int = 10) -> dict:
+    """Document-level: rank of the first retrieved chunk that comes from the source doc."""
+    ranks: dict[str, int | None] = {}
+    for item in items:
+        titles = [p.title for p in store.search(item.question, depth)]
+        ranks[item.id] = titles.index(item.source) + 1 if item.source in titles else None
+    n = len(ranks)
+    return {
+        "questions": n,
+        "recall@1": round(sum(r == 1 for r in ranks.values()) / n, 3),
+        f"recall@{k}": round(sum(r is not None and r <= k for r in ranks.values()) / n, 3),
+        "mrr": round(sum(1 / r for r in ranks.values() if r) / n, 3),
+        "not_first": sorted(i for i, r in ranks.items() if r != 1),
+    }
+
+
 def cohen_kappa(pairs: list[tuple[bool, bool]]) -> float:
     n = len(pairs)
     observed = sum(a == b for a, b in pairs) / n
@@ -294,6 +334,28 @@ async def _run(args: argparse.Namespace) -> None:
     print(f"\nrun written to {run_path}")
 
 
+def _retrieval(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    sets = load_retrieval_sets()
+    report = {}
+    for provider in ("hash", "fastembed"):
+        store_settings = settings.model_copy(
+            update={"embedding_provider": provider, "qdrant_url": ":memory:"}
+        )
+        store = DocumentStore.from_settings(store_settings)
+        load_directory(store, "corpus")
+        name = store.embedder.name
+        report[name] = {
+            set_name: retrieval_metrics(store, items, k=settings.top_k)
+            for set_name, items in sets.items()
+        }
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    out = RUNS_DIR / f"retrieval-{datetime.now():%Y%m%d-%H%M%S}.json"
+    out.write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
+    print(f"\nwritten to {out}")
+
+
 def _ask(prompt: str) -> bool | None:
     while True:
         answer = input(prompt).strip().lower()
@@ -349,11 +411,14 @@ def main() -> None:
     run.add_argument("--resume", metavar="RUN.jsonl", help="continue a run, retrying failures")
     sub.add_parser("label", help="label a run's answers by hand").add_argument("run")
     sub.add_parser("agreement", help="judge vs human agreement").add_argument("run")
+    sub.add_parser("retrieval", help="compare embedders on retrieval metrics (no LLM)")
     args = parser.parse_args()
     if args.command == "run":
         asyncio.run(_run(args))
     elif args.command == "label":
         _label(args)
+    elif args.command == "retrieval":
+        _retrieval(args)
     else:
         _agreement(args)
 

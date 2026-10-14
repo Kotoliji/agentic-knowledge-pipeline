@@ -37,6 +37,14 @@ def _stem(token: str) -> str:
     return token
 
 
+class Embedder(Protocol):
+    name: str
+    dim: int
+
+    def embed_query(self, text: str) -> list[float]: ...
+    def embed_passages(self, texts: list[str]) -> list[list[float]]: ...
+
+
 class HashEmbedder:
     """Feature-hashing bag-of-words vectors.
 
@@ -46,6 +54,13 @@ class HashEmbedder:
 
     def __init__(self, dim: int):
         self.dim = dim
+        self.name = f"hash{dim}"
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed(text)
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(t) for t in texts]
 
     def embed(self, text: str) -> list[float]:
         vec = [0.0] * self.dim
@@ -54,6 +69,30 @@ class HashEmbedder:
             vec[int.from_bytes(digest, "big") % self.dim] += 1.0
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
+
+
+class FastEmbedder:
+    """Local sentence embeddings (ONNX, CPU) via fastembed: semantic, no API quota."""
+
+    def __init__(self, model_name: str, cache_dir: str):
+        from fastembed import TextEmbedding
+
+        self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+        self.dim = self._model.embedding_size
+        self.name = model_name.rsplit("/", 1)[-1]
+
+    def embed_query(self, text: str) -> list[float]:
+        # query_embed adds the model's query instruction (bge models expect one).
+        return next(iter(self._model.query_embed(text))).tolist()
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [v.tolist() for v in self._model.passage_embed(texts)]
+
+
+def make_embedder(settings: Settings) -> Embedder:
+    if settings.embedding_provider == "fastembed":
+        return FastEmbedder(settings.embedding_model, settings.embedding_cache_dir)
+    return HashEmbedder(settings.embedding_dim)
 
 
 def chunk_text(text: str, size: int, overlap: int) -> list[str]:
@@ -106,11 +145,15 @@ class SearchBackend(Protocol):
 
 
 class DocumentStore:
-    def __init__(self, client: QdrantClient, settings: Settings):
+    def __init__(self, client: QdrantClient, settings: Settings, embedder: Embedder | None = None):
         self.client = client
         self.settings = settings
-        self.collection = settings.collection
-        self.embedder = HashEmbedder(settings.embedding_dim)
+        self.embedder = embedder or make_embedder(settings)
+        # One collection per embedder: vectors from different models aren't comparable,
+        # and switching EMBEDDING_PROVIDER must not hit a dimension mismatch.
+        self.collection = (
+            f"{settings.collection}__{re.sub(r'[^a-z0-9]+', '-', self.embedder.name.lower())}"
+        )
         self.ensure_collection()
 
     @classmethod
@@ -125,7 +168,7 @@ class DocumentStore:
         self.client.create_collection(
             self.collection,
             vectors_config=models.VectorParams(
-                size=self.settings.embedding_dim, distance=models.Distance.COSINE
+                size=self.embedder.dim, distance=models.Distance.COSINE
             ),
         )
 
@@ -142,13 +185,14 @@ class DocumentStore:
             return IngestResult(doc_id=doc_id, title=title, chunks=existing, created=False)
 
         chunks = chunk_text(text, self.settings.chunk_size, self.settings.chunk_overlap)
+        vectors = self.embedder.embed_passages([f"{title}\n{chunk}" for chunk in chunks])
         points = [
             models.PointStruct(
                 id=str(uuid.uuid5(_POINT_NAMESPACE, f"{doc_id}:{i}")),
-                vector=self.embedder.embed(f"{title}\n{chunk}"),
+                vector=vector,
                 payload={"doc_id": doc_id, "title": title, "text": chunk, "index": i},
             )
-            for i, chunk in enumerate(chunks)
+            for i, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True))
         ]
         if points:
             self.client.upsert(self.collection, points=points)
@@ -156,7 +200,7 @@ class DocumentStore:
 
     def search(self, query: str, k: int) -> list[Passage]:
         hits = self.client.query_points(
-            self.collection, query=self.embedder.embed(query), limit=k, with_payload=True
+            self.collection, query=self.embedder.embed_query(query), limit=k, with_payload=True
         ).points
         return [
             Passage(

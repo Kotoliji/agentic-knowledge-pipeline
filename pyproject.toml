@@ -19,6 +19,7 @@ dependencies = [
     "grpcio-health-checking>=1.84",
     "protobuf>=7.36",
     "langfuse>=5.0,<6",
+    "fastembed>=0.9,<1",
 ]
 
 [project.optional-dependencies]

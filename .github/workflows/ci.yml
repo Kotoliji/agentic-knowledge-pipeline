@@ -27,5 +27,13 @@ jobs:
       - name: Generated gRPC code matches the .proto
         run: sh scripts/gen_proto.sh && git diff --exit-code src/akp/rpc
 
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-bge-small-en-v1.5
+
       - name: Test
+        env:
+          AKP_TEST_FASTEMBED: "1"
         run: pytest -q

@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from akp.agents import OfflineAgents
@@ -7,17 +9,20 @@ from akp.evaluation import (
     HeuristicJudge,
     HumanLabel,
     LLMJudge,
+    RetrievalItem,
     Verdict,
     agreement,
     cohen_kappa,
     load_items,
+    load_retrieval_sets,
     read_records,
+    retrieval_metrics,
     run_eval,
     summarize,
 )
 from akp.graph import build_graph
 from akp.observability import Observability
-from akp.retrieval import PassageRetriever
+from akp.retrieval import DocumentStore, PassageRetriever, load_directory
 from tests.conftest import CORPUS_DIR
 
 DATASET = CORPUS_DIR.parent / "evals" / "dataset.jsonl"
@@ -134,3 +139,41 @@ def test_read_records_keeps_the_latest_record_per_item(tmp_path):
     path.write_text(failed.model_dump_json() + "\n" + _record("a", True, False).model_dump_json())
     [record] = read_records(path)
     assert record.verdict is not None and record.verdict.faithful is False
+
+
+def test_paraphrase_set_is_well_formed():
+    sets = load_retrieval_sets()
+    titles = {p.read_text().splitlines()[0][2:] for p in CORPUS_DIR.glob("*.md")}
+    paraphrases = sets["paraphrases"]
+    assert len({i.id for i in paraphrases}) == len(paraphrases) >= 10
+    assert {i.source for i in paraphrases} <= titles
+
+
+def test_retrieval_metrics(loaded_store):
+    items = [
+        RetrievalItem(
+            id="hit", question="hotel limit per night in London", source="Expense Policy"
+        ),
+        RetrievalItem(id="miss", question="hotel limit per night", source="No Such Document"),
+    ]
+    metrics = retrieval_metrics(loaded_store, items, k=4)
+    assert metrics["questions"] == 2
+    assert metrics["recall@1"] == 0.5
+    assert metrics["mrr"] == 0.5
+    assert metrics["not_first"] == ["miss"]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AKP_TEST_FASTEMBED"),
+    reason="downloads a 65 MB model; set AKP_TEST_FASTEMBED=1",
+)
+def test_semantic_embeddings_beat_hashing_on_paraphrases(settings):
+    paraphrases = load_retrieval_sets()["paraphrases"]
+    scores = {}
+    for provider in ("hash", "fastembed"):
+        store = DocumentStore.from_settings(
+            settings.model_copy(update={"embedding_provider": provider})
+        )
+        load_directory(store, CORPUS_DIR)
+        scores[provider] = retrieval_metrics(store, paraphrases)["mrr"]
+    assert scores["fastembed"] > scores["hash"] + 0.2

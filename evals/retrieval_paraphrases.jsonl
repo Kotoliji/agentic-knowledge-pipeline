@@ -1,0 +1,13 @@
+{"id": "par-01", "question": "How long do I have to hand in receipts to get my money back?", "source": "Expense Policy"}
+{"id": "par-02", "question": "Who has to sign off when I spend a lot on something for work?", "source": "Expense Policy"}
+{"id": "par-03", "question": "Is there extra money for being the person who gets woken up when production breaks at night?", "source": "On-Call Rotation"}
+{"id": "par-04", "question": "What should I write up after a big outage?", "source": "On-Call Rotation"}
+{"id": "par-05", "question": "On which days am I allowed to ship new code to customers?", "source": "Deployment Process"}
+{"id": "par-06", "question": "Is there a time of year when we can't release anything?", "source": "Deployment Process"}
+{"id": "par-07", "question": "What should I do if someone steals my work computer?", "source": "Security Guidelines"}
+{"id": "par-08", "question": "Can I keep my logins in a text file on my desktop?", "source": "Security Guidelines"}
+{"id": "par-09", "question": "How many vacation days do I get each year?", "source": "Time Off"}
+{"id": "par-10", "question": "How much time can I take when my child is born?", "source": "Time Off"}
+{"id": "par-11", "question": "Can I spend a month working from my parents' place in Portugal?", "source": "Remote Work"}
+{"id": "par-12", "question": "Does the company contribute to furniture for my setup at home?", "source": "Remote Work"}
+{"id": "par-13", "question": "Who can I go to with questions during my first weeks?", "source": "Onboarding Guide"}

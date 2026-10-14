@@ -47,7 +47,12 @@ class Settings(BaseSettings):
 
     qdrant_url: str = ":memory:"
     collection: str = "documents"
-    embedding_dim: int = 1024
+    # "hash": lexical feature hashing, no model (tests, CI). "fastembed": local
+    # ONNX sentence-embedding model, downloaded once into embedding_cache_dir.
+    embedding_provider: Literal["hash", "fastembed"] = "hash"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_cache_dir: str = ".cache/fastembed"
+    embedding_dim: int = 1024  # hash embedder only
     chunk_size: int = 700
     chunk_overlap: int = 100
     top_k: int = 4
