@@ -131,7 +131,7 @@ async def test_offline_router_small_talk(question):
 
 @pytest.mark.parametrize(
     ("provider", "expected_model"),
-    [("anthropic", "claude-opus-5-5"), ("google", "gemini-2.5-flash")],
+    [("anthropic", "claude-opus-5-5"), ("google", "gemini-3.5-flash")],
 )
 def test_llm_agents_wire_up_for_each_provider(settings, store, provider, expected_model):
     from akp.agents import LLMAgents, chat_model
@@ -153,4 +153,4 @@ def test_llm_agents_wire_up_for_each_provider(settings, store, provider, expecte
 def test_per_role_model_override(settings):
     s = settings.model_copy(update={"llm_provider": "google", "model_judge": "gemini-x"})
     assert s.model_for("judge") == "gemini-x"
-    assert s.model_for("answer") == "gemini-2.5-flash"
+    assert s.model_for("answer") == "gemini-3.5-flash"

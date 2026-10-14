@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Role = Literal["router", "answer", "critic", "judge"]
 
-DEFAULT_MODELS = {"anthropic": "claude-opus-5-5", "google": "gemini-2.5-flash"}
+DEFAULT_MODELS = {"anthropic": "claude-opus-5-5", "google": "gemini-3.5-flash"}
 
 
 class Settings(BaseSettings):
