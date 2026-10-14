@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     effort_answer: Literal["low", "medium", "high"] = "medium"
     effort_critic: Literal["low", "medium", "high"] = "low"
 
+    # "local": the API process owns the vector store (single-process mode).
+    # "grpc": the store lives in the retrieval service at retrieval_grpc_target.
+    retrieval_backend: Literal["local", "grpc"] = "local"
+    retrieval_grpc_target: str = "localhost:50051"
+    grpc_port: int = 50051
+
     qdrant_url: str = ":memory:"
     collection: str = "documents"
     embedding_dim: int = 1024

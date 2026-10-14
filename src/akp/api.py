@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 import anthropic
@@ -16,6 +17,9 @@ from akp.retrieval import (
     PassageRetriever,
     load_directory,
 )
+from akp.retrieval_service import RetrievalClient, RetrievalUnavailable
+
+log = logging.getLogger(__name__)
 
 
 class AskRequest(BaseModel):
@@ -48,9 +52,12 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        store = DocumentStore.from_settings(settings)
-        if settings.seed_corpus_dir:
-            load_directory(store, settings.seed_corpus_dir)
+        if settings.retrieval_backend == "grpc":
+            store = RetrievalClient(settings.retrieval_grpc_target, settings.retrieval_timeout_s)
+        else:
+            store = DocumentStore.from_settings(settings)
+            if settings.seed_corpus_dir:
+                load_directory(store, settings.seed_corpus_dir)
         retriever = PassageRetriever(backend=store, k=settings.top_k)
         obs = Observability.from_settings(settings)
         app.state.store = store
@@ -64,6 +71,11 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
     @app.exception_handler(anthropic.APIError)
     async def llm_unavailable(request: Request, exc: anthropic.APIError) -> JSONResponse:
         return JSONResponse(status_code=502, content={"detail": f"LLM provider error: {exc}"})
+
+    @app.exception_handler(RetrievalUnavailable)
+    async def retrieval_unavailable(request: Request, exc: RetrievalUnavailable) -> JSONResponse:
+        log.warning("retrieval service unavailable: %s", exc)
+        return JSONResponse(status_code=503, content={"detail": "Retrieval service is unavailable"})
 
     @app.get("/health")
     def health() -> dict:

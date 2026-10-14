@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package akp.retrieval.v1;
+
+// Owns the vector store. The agent graph searches through it, the API lists and
+// deletes documents through it, and the ingestion worker writes through it.
+service RetrievalService {
+  // INVALID_ARGUMENT: empty query or top_k above the server limit.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Idempotent: the document id is a content hash, re-sending is a no-op.
+  rpc UpsertDocument(UpsertDocumentRequest) returns (UpsertDocumentResponse);
+  rpc ListDocuments(ListDocumentsRequest) returns (ListDocumentsResponse);
+  // NOT_FOUND: no document with this id.
+  rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
+}
+
+message SearchRequest {
+  string query = 1;
+  // 0 means the server default.
+  uint32 top_k = 2;
+}
+
+message Passage {
+  string chunk_id = 1;
+  string doc_id = 2;
+  string title = 3;
+  string text = 4;
+  float score = 5;
+}
+
+message SearchResponse {
+  repeated Passage passages = 1;
+}
+
+message UpsertDocumentRequest {
+  string title = 1;
+  string text = 2;
+}
+
+message UpsertDocumentResponse {
+  string doc_id = 1;
+  string title = 2;
+  uint32 chunks = 3;
+  bool created = 4;
+}
+
+message ListDocumentsRequest {}
+
+message DocumentInfo {
+  string doc_id = 1;
+  string title = 2;
+  uint32 chunks = 3;
+}
+
+message ListDocumentsResponse {
+  repeated DocumentInfo documents = 1;
+}
+
+message DeleteDocumentRequest {
+  string doc_id = 1;
+}
+
+message DeleteDocumentResponse {}

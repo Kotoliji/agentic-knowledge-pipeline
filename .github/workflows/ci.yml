@@ -24,5 +24,8 @@ jobs:
           ruff check .
           ruff format --check .
 
+      - name: Generated gRPC code matches the .proto
+        run: sh scripts/gen_proto.sh && git diff --exit-code src/akp/rpc
+
       - name: Test
         run: pytest -q

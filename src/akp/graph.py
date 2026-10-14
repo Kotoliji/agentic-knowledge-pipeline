@@ -108,7 +108,8 @@ def build_graph(agents: Agents, retriever: PassageRetriever, settings: Settings,
             initial_interval=0.2,
             retry_on=(ConnectionError, TimeoutError, NodeTimeoutError),
         ),
-        timeout=settings.retrieval_timeout_s,
+        # Longer than the gRPC deadline, so the client's own error surfaces first.
+        timeout=settings.retrieval_timeout_s + 2,
         error_handler=retrieval_failed,
         destinations=("finalize",),
     )
