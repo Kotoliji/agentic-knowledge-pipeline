@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     effort_router: Literal["low", "medium", "high"] = "low"
     effort_answer: Literal["low", "medium", "high"] = "medium"
     effort_critic: Literal["low", "medium", "high"] = "low"
+    model_judge: str = "claude-opus-5-5"
+    effort_judge: Literal["low", "medium", "high"] = "medium"
 
     # "local": the API process owns the vector store (single-process mode).
     # "grpc": the store lives in the retrieval service at retrieval_grpc_target.

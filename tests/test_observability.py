@@ -64,4 +64,9 @@ def test_unreachable_langfuse_falls_back_once_and_stops_fetching():
 def test_sync_publishes_only_changed_prompts():
     unchanged = {"akp-router": PROMPTS["akp-router"]}
     client = FakeLangfuse(existing=unchanged)
-    assert sorted(sync(client, "production")) == ["akp-chat", "akp-critic", "akp-draft"]
+    assert sorted(sync(client, "production")) == [
+        "akp-chat",
+        "akp-critic",
+        "akp-draft",
+        "akp-judge",
+    ]

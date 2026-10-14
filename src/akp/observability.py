@@ -70,6 +70,16 @@ class Observability:
             return None
         return self.client.get_trace_url(trace_id=trace_id)
 
+    def score(self, trace_id: str | None, name: str, value: bool, comment: str = "") -> None:
+        if self.client and trace_id:
+            self.client.create_score(
+                trace_id=trace_id,
+                name=name,
+                value=1.0 if value else 0.0,
+                data_type="BOOLEAN",
+                comment=comment or None,
+            )
+
     def flush(self) -> None:
         if self.client:
             self.client.flush()

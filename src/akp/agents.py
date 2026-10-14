@@ -44,7 +44,7 @@ def format_passages(passages: list[Passage]) -> str:
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 
 
-def _chat_model(settings: Settings, model: str, effort: str, max_tokens: int) -> ChatAnthropic:
+def chat_model(settings: Settings, model: str, effort: str, max_tokens: int) -> ChatAnthropic:
     extra = {}
     if settings.anthropic_api_key:
         extra["api_key"] = settings.anthropic_api_key
@@ -65,9 +65,9 @@ class ClaudeAgents:
     def __init__(self, settings: Settings, observability: Observability | None = None):
         self._obs = observability or Observability()
         s = settings
-        router = _chat_model(s, s.model_router, s.effort_router, 8000)
-        answer = _chat_model(s, s.model_answer, s.effort_answer, 16000)
-        critic = _chat_model(s, s.model_critic, s.effort_critic, 8000)
+        router = chat_model(s, s.model_router, s.effort_router, 8000)
+        answer = chat_model(s, s.model_answer, s.effort_answer, 16000)
+        critic = chat_model(s, s.model_critic, s.effort_critic, 8000)
         # json_schema = native structured outputs. The default ("function_calling")
         # forces tool_choice, which current models reject.
         self._router = router.with_structured_output(RouteDecision, method="json_schema")

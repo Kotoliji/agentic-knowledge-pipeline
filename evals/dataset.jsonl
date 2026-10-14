@@ -1,0 +1,30 @@
+{"id": "exp-01", "question": "Within how many days of the purchase must an expense claim be submitted?", "reference": "Within 60 days of the purchase date; older claims are rejected automatically.", "answerable": true, "source": "Expense Policy"}
+{"id": "exp-02", "question": "Who has to approve an expense claim of 400 EUR?", "reference": "Both the direct manager and the Finance team, because claims above 250 EUR also need Finance approval.", "answerable": true, "source": "Expense Policy"}
+{"id": "exp-03", "question": "What is the hotel limit per night in Paris?", "reference": "220 EUR per night.", "answerable": true, "source": "Expense Policy"}
+{"id": "exp-04", "question": "Can I fly business class on a four-hour flight for work?", "reference": "No. Economy is the default for flights under six hours; business class is only allowed for flights of six hours or longer.", "answerable": true, "source": "Expense Policy"}
+{"id": "exp-05", "question": "What is the hotel limit per night in Tokyo?", "reference": "160 EUR per night, the standard limit; Tokyo is not one of the cities with the higher 220 EUR limit.", "answerable": true, "source": "Expense Policy"}
+{"id": "onc-01", "question": "How quickly does the primary on-call engineer have to acknowledge a page?", "reference": "Within 15 minutes; otherwise the page escalates to the secondary.", "answerable": true, "source": "On-Call Rotation"}
+{"id": "onc-02", "question": "What happens if neither on-call engineer acknowledges a page within 30 minutes?", "reference": "It escalates to the engineering manager of the owning team.", "answerable": true, "source": "On-Call Rotation"}
+{"id": "onc-03", "question": "How much is the stipend for a week of secondary on-call?", "reference": "150 EUR per week.", "answerable": true, "source": "On-Call Rotation"}
+{"id": "onc-04", "question": "By when must the post-mortem for a Severity 1 incident be published?", "reference": "Within five working days of the incident.", "answerable": true, "source": "On-Call Rotation"}
+{"id": "dep-01", "question": "Can I deploy a regular change on a Friday afternoon?", "reference": "No. Regular deployments are allowed Monday to Thursday, 09:00 to 16:00 CET; on Fridays only hotfixes are allowed.", "answerable": true, "source": "Deployment Process"}
+{"id": "dep-02", "question": "When does the code freeze apply?", "reference": "From 15 December to 5 January.", "answerable": true, "source": "Deployment Process"}
+{"id": "dep-03", "question": "How many approving reviews does a change to authentication code need?", "reference": "Two approving reviews, one of them from the Security team.", "answerable": true, "source": "Deployment Process"}
+{"id": "dep-04", "question": "What share of traffic does a canary release get first, and for how long?", "reference": "5 percent of traffic for 30 minutes.", "answerable": true, "source": "Deployment Process"}
+{"id": "sec-01", "question": "What is the minimum password length?", "reference": "14 characters.", "answerable": true, "source": "Security Guidelines"}
+{"id": "sec-02", "question": "Can people with production access use SMS codes as their second factor?", "reference": "No. Hardware security keys are required for anyone with production access; SMS codes are not accepted.", "answerable": true, "source": "Security Guidelines"}
+{"id": "sec-03", "question": "How soon do I have to report a lost laptop?", "reference": "Within 1 hour of noticing (immediately), to security@halden.example or the #security-incidents channel.", "answerable": true, "source": "Security Guidelines"}
+{"id": "tim-01", "question": "How many unused vacation days can I carry over, and when do they expire?", "reference": "Up to 5 days, which expire on 31 March.", "answerable": true, "source": "Time Off"}
+{"id": "tim-02", "question": "How much notice do I need to give for a two-week vacation?", "reference": "At least four weeks, since the request is longer than 3 days.", "answerable": true, "source": "Time Off"}
+{"id": "tim-03", "question": "How many weeks of paid parental leave do non-birth parents get?", "reference": "10 weeks of fully paid parental leave.", "answerable": true, "source": "Time Off"}
+{"id": "rem-01", "question": "How many days per week can I work remotely?", "reference": "Up to 3 days per week.", "answerable": true, "source": "Remote Work"}
+{"id": "rem-02", "question": "Can I work from the UK for two weeks?", "reference": "Yes. Working from another country is allowed for up to 30 days per calendar year if the country is in the EU or the UK.", "answerable": true, "source": "Remote Work"}
+{"id": "rem-03", "question": "How much is the home office stipend for new employees?", "reference": "A one-time stipend of 500 EUR.", "answerable": true, "source": "Remote Work"}
+{"id": "onb-01", "question": "How long is the account activation link valid?", "reference": "72 hours.", "answerable": true, "source": "Onboarding Guide"}
+{"id": "onb-02", "question": "How long is the probation period for engineers?", "reference": "6 months, which can be shortened to 3 months if the 90-day review is positive.", "answerable": true, "source": "Onboarding Guide"}
+{"id": "na-01", "question": "What was the company's revenue last year?", "reference": "Not in the documents.", "answerable": false, "source": null}
+{"id": "na-02", "question": "Does the company pay for a gym membership?", "reference": "Not in the documents.", "answerable": false, "source": null}
+{"id": "na-03", "question": "What is the vesting schedule for stock options?", "reference": "Not in the documents.", "answerable": false, "source": null}
+{"id": "na-04", "question": "Who is the CEO of Halden Systems?", "reference": "Not in the documents.", "answerable": false, "source": null}
+{"id": "na-05", "question": "How many vacation days do contractors get?", "reference": "Not in the documents (the policy covers full-time and part-time employees only).", "answerable": false, "source": null}
+{"id": "na-06", "question": "Is there a dress code in the office?", "reference": "Not in the documents.", "answerable": false, "source": null}

@@ -63,6 +63,38 @@ PROMPTS: dict[str, Messages] = {
             ),
         },
     ],
+    "akp-judge": [
+        {
+            "role": "system",
+            "content": (
+                "You grade answers produced by a question-answering assistant that must answer "
+                "only from company documents. Judge two criteria independently.\n\n"
+                "correct:\n"
+                "- If the question is answerable from the documents: true when the answer "
+                "states the key facts of the reference answer and contradicts none of them. "
+                "Extra accurate detail is fine; a missing key fact or any contradiction makes "
+                "it false. Declining to answer is false.\n"
+                "- If the question is not answerable from the documents: true only when the "
+                "assistant declines or says it could not find the answer.\n\n"
+                "faithful:\n"
+                "- true when every factual claim in the answer is supported by the cited "
+                "passages shown to you. Judge only against those passages, not the reference.\n"
+                "- A decline or 'could not find' answer is faithful.\n"
+                "- An answer that makes factual claims with no cited passages is not faithful.\n\n"
+                "Write brief reasoning first, then the two verdicts."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Question: {{question}}\n"
+                "Answerable from the documents: {{answerable}}\n"
+                "Reference answer: {{reference}}\n\n"
+                "Assistant answer: {{answer}}\n\n"
+                "Cited passages:\n{{passages}}"
+            ),
+        },
+    ],
     "akp-chat": [
         {
             "role": "system",

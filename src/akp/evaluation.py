@@ -1,0 +1,307 @@
+"""Evaluate the agent graph with an LLM judge, and the judge against human labels.
+
+    python -m akp.evaluation run [--limit N]          # answer + judge the dataset
+    python -m akp.evaluation label RUN.jsonl          # label the same answers yourself
+    python -m akp.evaluation agreement RUN.jsonl      # judge vs human: agreement, kappa
+
+Human labelling never shows the judge's verdict, so it can't anchor the labeller.
+"""
+
+import argparse
+import asyncio
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Protocol
+
+from pydantic import BaseModel
+
+from akp.agents import chat_model, format_passages, make_agents
+from akp.config import Settings, get_settings
+from akp.graph import build_graph
+from akp.observability import Observability
+from akp.retrieval import DocumentStore, Passage, PassageRetriever, load_directory, tokenize
+
+EVAL_DIR = Path("evals")
+DATASET = EVAL_DIR / "dataset.jsonl"
+RUNS_DIR = EVAL_DIR / "runs"
+LABELS_DIR = EVAL_DIR / "labels"
+CRITERIA = ("correct", "faithful")
+
+
+class EvalItem(BaseModel):
+    id: str
+    question: str
+    reference: str
+    answerable: bool
+    source: str | None = None
+
+
+class Verdict(BaseModel):
+    reasoning: str
+    correct: bool
+    faithful: bool
+
+
+class EvalRecord(BaseModel):
+    item: EvalItem
+    answer: str
+    status: str
+    citations: list[Passage]
+    search_queries: list[str]
+    trace_id: str | None
+    verdict: Verdict
+
+
+class HumanLabel(BaseModel):
+    id: str
+    correct: bool
+    faithful: bool
+
+
+class Judge(Protocol):
+    async def grade(
+        self, item: EvalItem, answer: str, citations: list[Passage], config: dict
+    ) -> Verdict: ...
+
+
+class ClaudeJudge:
+    def __init__(self, settings: Settings, observability: Observability):
+        self._obs = observability
+        model = chat_model(settings, settings.model_judge, settings.effort_judge, 16000)
+        self._model = model.with_structured_output(Verdict, method="json_schema")
+
+    async def grade(self, item, answer, citations, config) -> Verdict:
+        chain = self._obs.prompt("akp-judge") | self._model
+        inputs = {
+            "question": item.question,
+            "answerable": "yes" if item.answerable else "no",
+            "reference": item.reference,
+            "answer": answer,
+            "passages": format_passages(citations),
+        }
+        return await chain.ainvoke(inputs, {**config, "run_name": "judge"})
+
+
+class HeuristicJudge:
+    """Offline stand-in for CI: numbers/keyword overlap. Not a real judge."""
+
+    async def grade(self, item, answer, citations, config) -> Verdict:
+        declined = not citations
+        if not item.answerable:
+            correct = declined
+        elif declined:
+            correct = False
+        else:
+            numbers = set(re.findall(r"\d+", item.reference))
+            if numbers:
+                correct = numbers <= set(re.findall(r"\d+", answer))
+            else:
+                ref = set(tokenize(item.reference))
+                correct = len(ref & set(tokenize(answer))) >= len(ref) / 2
+        faithful = declined or any(answer.strip() in c.text for c in citations)
+        return Verdict(reasoning="heuristic", correct=correct, faithful=faithful)
+
+
+def load_items(path: Path = DATASET) -> list[EvalItem]:
+    return [EvalItem.model_validate_json(line) for line in path.read_text().splitlines() if line]
+
+
+async def run_eval(
+    items: list[EvalItem],
+    graph,
+    judge: Judge,
+    obs: Observability,
+    run_name: str,
+    concurrency: int = 4,
+) -> list[EvalRecord]:
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def evaluate(item: EvalItem) -> EvalRecord:
+        async with semaphore:
+            trace_id, callbacks = obs.new_trace()
+            config = {
+                "callbacks": callbacks,
+                "metadata": {"langfuse_session_id": run_name, "langfuse_tags": ["eval"]},
+            }
+            state = await graph.ainvoke({"question": item.question}, {**config, "run_name": "ask"})
+            citations = state.get("citations", [])
+            verdict = await judge.grade(item, state["answer"], citations, config)
+            for criterion in CRITERIA:
+                obs.score(
+                    trace_id, f"judge_{criterion}", getattr(verdict, criterion), verdict.reasoning
+                )
+            return EvalRecord(
+                item=item,
+                answer=state["answer"],
+                status=state["status"],
+                citations=citations,
+                search_queries=state.get("tried_queries", []),
+                trace_id=trace_id,
+                verdict=verdict,
+            )
+
+    return list(await asyncio.gather(*(evaluate(i) for i in items)))
+
+
+def summarize(records: list[EvalRecord]) -> dict:
+    def rate(rs: list[EvalRecord], criterion: str) -> float | None:
+        return round(sum(getattr(r.verdict, criterion) for r in rs) / len(rs), 3) if rs else None
+
+    answerable = [r for r in records if r.item.answerable]
+    unanswerable = [r for r in records if not r.item.answerable]
+    statuses: dict[str, int] = {}
+    for r in records:
+        statuses[r.status] = statuses.get(r.status, 0) + 1
+    return {
+        "items": len(records),
+        "correct": rate(records, "correct"),
+        "faithful": rate(records, "faithful"),
+        "correct_on_answerable": rate(answerable, "correct"),
+        "correct_decline_on_unanswerable": rate(unanswerable, "correct"),
+        "needed_second_retrieval": sum(len(r.search_queries) > 1 for r in records),
+        "statuses": statuses,
+    }
+
+
+def cohen_kappa(pairs: list[tuple[bool, bool]]) -> float:
+    n = len(pairs)
+    observed = sum(a == b for a, b in pairs) / n
+    p_a = sum(a for a, _ in pairs) / n
+    p_b = sum(b for _, b in pairs) / n
+    expected = p_a * p_b + (1 - p_a) * (1 - p_b)
+    if expected == 1:
+        return 1.0 if observed == 1 else 0.0
+    return (observed - expected) / (1 - expected)
+
+
+def agreement(records: list[EvalRecord], labels: list[HumanLabel]) -> dict:
+    by_id = {label.id: label for label in labels}
+    labelled = [r for r in records if r.item.id in by_id]
+    report: dict = {"labelled_items": len(labelled)}
+    for criterion in CRITERIA:
+        pairs = [
+            (getattr(r.verdict, criterion), getattr(by_id[r.item.id], criterion)) for r in labelled
+        ]
+        if not pairs:
+            continue
+        report[criterion] = {
+            "agreement": round(sum(a == b for a, b in pairs) / len(pairs), 3),
+            "cohen_kappa": round(cohen_kappa(pairs), 3),
+            "judge_yes_human_no": sum(a and not b for a, b in pairs),
+            "judge_no_human_yes": sum(b and not a for a, b in pairs),
+            "disagreements": [
+                r.item.id for r, (a, b) in zip(labelled, pairs, strict=True) if a != b
+            ],
+        }
+    return report
+
+
+def read_records(path: Path) -> list[EvalRecord]:
+    return [EvalRecord.model_validate_json(line) for line in path.read_text().splitlines() if line]
+
+
+def labels_path_for(run_path: Path) -> Path:
+    return LABELS_DIR / run_path.name
+
+
+def read_labels(path: Path) -> list[HumanLabel]:
+    if not path.exists():
+        return []
+    return [HumanLabel.model_validate_json(line) for line in path.read_text().splitlines() if line]
+
+
+def build_eval_graph(settings: Settings, obs: Observability):
+    store = DocumentStore.from_settings(settings.model_copy(update={"qdrant_url": ":memory:"}))
+    load_directory(store, "corpus")
+    retriever = PassageRetriever(backend=store, k=settings.top_k)
+    return build_graph(make_agents(settings, obs), retriever, settings)
+
+
+async def _run(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    obs = Observability.from_settings(settings)
+    graph = build_eval_graph(settings, obs)
+    real = settings.llm_provider == "anthropic"
+    judge: Judge = ClaudeJudge(settings, obs) if real else HeuristicJudge()
+    items = load_items()[: args.limit]
+    run_name = f"{datetime.now():%Y%m%d-%H%M%S}-{settings.llm_provider}"
+
+    records = await run_eval(items, graph, judge, obs, run_name, args.concurrency)
+    obs.flush()
+
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    run_path = RUNS_DIR / f"{run_name}.jsonl"
+    run_path.write_text("".join(r.model_dump_json() + "\n" for r in records))
+    summary = summarize(records)
+    run_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2))
+    print(f"\nrun written to {run_path}")
+
+
+def _ask(prompt: str) -> bool | None:
+    while True:
+        answer = input(prompt).strip().lower()
+        if answer in ("y", "n"):
+            return answer == "y"
+        if answer == "q":
+            return None
+
+
+def _label(args: argparse.Namespace) -> None:
+    run_path = Path(args.run)
+    out = labels_path_for(run_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    done = {label.id for label in read_labels(out)}
+    obs = Observability.from_settings(get_settings())
+    todo = [r for r in read_records(run_path) if r.item.id not in done]
+    print(f"{len(done)} labelled, {len(todo)} to go. Answer y/n, q to stop.\n")
+    for r in todo:
+        print("=" * 80)
+        print(f"[{r.item.id}] {r.item.question}")
+        print(f"Answerable from docs: {r.item.answerable} | Reference: {r.item.reference}")
+        print(f"\nAnswer ({r.status}): {r.answer}")
+        for i, c in enumerate(r.citations, 1):
+            print(f"\n  [{i}] {c.title}: {c.text}")
+        correct = _ask("\ncorrect? ")
+        if correct is None:
+            break
+        faithful = _ask("faithful (every claim backed by the cited passages)? ")
+        if faithful is None:
+            break
+        label = HumanLabel(id=r.item.id, correct=correct, faithful=faithful)
+        with out.open("a") as f:
+            f.write(label.model_dump_json() + "\n")
+        obs.score(r.trace_id, "human_correct", correct)
+        obs.score(r.trace_id, "human_faithful", faithful)
+    obs.flush()
+    print(f"\nlabels saved to {out}")
+
+
+def _agreement(args: argparse.Namespace) -> None:
+    run_path = Path(args.run)
+    report = agreement(read_records(run_path), read_labels(labels_path_for(run_path)))
+    run_path.with_suffix(".agreement.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="python -m akp.evaluation")
+    sub = parser.add_subparsers(dest="command", required=True)
+    run = sub.add_parser("run", help="answer and judge the dataset")
+    run.add_argument("--limit", type=int, default=None)
+    run.add_argument("--concurrency", type=int, default=4)
+    sub.add_parser("label", help="label a run's answers by hand").add_argument("run")
+    sub.add_parser("agreement", help="judge vs human agreement").add_argument("run")
+    args = parser.parse_args()
+    if args.command == "run":
+        asyncio.run(_run(args))
+    elif args.command == "label":
+        _label(args)
+    else:
+        _agreement(args)
+
+
+if __name__ == "__main__":
+    main()
