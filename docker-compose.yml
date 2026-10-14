@@ -1,0 +1,69 @@
+name: akp
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # The image has no curl/wget; bash can open a TCP connection itself.
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  retrieval:
+    build: .
+    image: akp:latest
+    command: ["python", "-m", "akp.retrieval_service"]
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      EMBEDDING_PROVIDER: fastembed
+      SEED_CORPUS_DIR: /app/corpus
+      GRPC_PORT: "50051"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import grpc; from grpc_health.v1 import health_pb2 as h, health_pb2_grpc as g;
+          s = g.HealthStub(grpc.insecure_channel('localhost:50051'))
+          .Check(h.HealthCheckRequest(service='akp.retrieval.v1.RetrievalService'), timeout=2).status;
+          exit(0 if s == h.HealthCheckResponse.SERVING else 1)
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  api:
+    image: akp:latest
+    # LLM and Langfuse keys come from .env when present; without it the stack
+    # runs with the offline agents.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RETRIEVAL_BACKEND: grpc
+      RETRIEVAL_GRPC_TARGET: retrieval:50051
+      SEED_CORPUS_DIR: ""
+    ports:
+      - "8000:8000"
+    depends_on:
+      retrieval:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  qdrant_data:

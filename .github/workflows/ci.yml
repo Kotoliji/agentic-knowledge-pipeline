@@ -37,3 +37,20 @@ jobs:
         env:
           AKP_TEST_FASTEMBED: "1"
         run: pytest -q
+
+  compose:
+    # Builds the image and runs the whole stack (Qdrant, gRPC retrieval service,
+    # API) with the offline agents, then checks it end to end.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the stack
+        run: docker compose up -d --build --wait
+
+      - name: Smoke test
+        run: sh scripts/smoke_test.sh
+
+      - name: Logs
+        if: failure()
+        run: docker compose logs
