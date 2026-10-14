@@ -129,9 +129,28 @@ async def test_offline_router_small_talk(question):
     assert (await OfflineAgents().route(question)).route == "direct"
 
 
-def test_claude_agents_wire_up_without_calling_the_api(monkeypatch, settings, store):
-    from akp.agents import ClaudeAgents
+@pytest.mark.parametrize(
+    ("provider", "expected_model"),
+    [("anthropic", "claude-opus-5-5"), ("google", "gemini-2.5-flash")],
+)
+def test_llm_agents_wire_up_for_each_provider(settings, store, provider, expected_model):
+    from akp.agents import LLMAgents, chat_model
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
-    graph = make_graph(ClaudeAgents(settings), store, settings)
+    s = settings.model_copy(
+        update={
+            "llm_provider": provider,
+            "anthropic_api_key": "test-key-not-used",
+            "google_api_key": "test-key-not-used",
+            "llm_requests_per_minute": 10,
+        }
+    )
+    graph = make_graph(LLMAgents(s), store, s)
     assert set(graph.get_graph().nodes) >= {"route", "retrieve", "draft", "critic", "finalize"}
+    assert s.model_for("router") == expected_model
+    assert chat_model(s, "judge", 100).rate_limiter is not None
+
+
+def test_per_role_model_override(settings):
+    s = settings.model_copy(update={"llm_provider": "google", "model_judge": "gemini-x"})
+    assert s.model_for("judge") == "gemini-x"
+    assert s.model_for("answer") == "gemini-2.5-flash"

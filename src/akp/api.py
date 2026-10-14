@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 import anthropic
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from google.genai.errors import APIError as GoogleAPIError
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 from pydantic import BaseModel, Field
 
 from akp.agents import Agents, make_agents
@@ -68,9 +70,12 @@ def create_app(settings: Settings | None = None, agents: Agents | None = None) -
 
     app = FastAPI(title="Agentic Knowledge Pipeline", lifespan=lifespan)
 
-    @app.exception_handler(anthropic.APIError)
-    async def llm_unavailable(request: Request, exc: anthropic.APIError) -> JSONResponse:
-        return JSONResponse(status_code=502, content={"detail": f"LLM provider error: {exc}"})
+    async def llm_unavailable(request: Request, exc: Exception) -> JSONResponse:
+        log.warning("LLM provider error: %s", exc)
+        return JSONResponse(status_code=502, content={"detail": "LLM provider error"})
+
+    for provider_error in (anthropic.APIError, GoogleAPIError, ChatGoogleGenerativeAIError):
+        app.add_exception_handler(provider_error, llm_unavailable)
 
     @app.exception_handler(RetrievalUnavailable)
     async def retrieval_unavailable(request: Request, exc: RetrievalUnavailable) -> JSONResponse:

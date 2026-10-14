@@ -1,11 +1,14 @@
 import re
+from functools import lru_cache
 from typing import Literal, Protocol
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from pydantic import BaseModel, Field
 
-from akp.config import Settings
+from akp.config import Role, Settings
 from akp.observability import Observability
 from akp.retrieval import Passage, tokenize
 
@@ -44,7 +47,35 @@ def format_passages(passages: list[Passage]) -> str:
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 
 
-def chat_model(settings: Settings, model: str, effort: str, max_tokens: int) -> ChatAnthropic:
+@lru_cache
+def _rate_limiter(requests_per_minute: float) -> InMemoryRateLimiter:
+    # One limiter per process, shared by every node and the judge: free-tier quotas
+    # are per project, not per caller.
+    return InMemoryRateLimiter(
+        requests_per_second=requests_per_minute / 60, check_every_n_seconds=0.1
+    )
+
+
+def chat_model(settings: Settings, role: Role, max_tokens: int) -> BaseChatModel:
+    model = settings.model_for(role)
+    limiter = (
+        _rate_limiter(settings.llm_requests_per_minute)
+        if settings.llm_requests_per_minute
+        else None
+    )
+    if settings.llm_provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        extra = {"google_api_key": settings.google_api_key} if settings.google_api_key else {}
+        return ChatGoogleGenerativeAI(
+            model=model,
+            max_output_tokens=max_tokens,
+            max_retries=6,
+            timeout=120,
+            rate_limiter=limiter,
+            **extra,
+        )
+
     extra = {}
     if settings.anthropic_api_key:
         extra["api_key"] = settings.anthropic_api_key
@@ -54,22 +85,24 @@ def chat_model(settings: Settings, model: str, effort: str, max_tokens: int) -> 
     return ChatAnthropic(
         model=model,
         max_tokens=max_tokens,
-        output_config={"effort": effort},
+        output_config={"effort": getattr(settings, f"effort_{role}")},
         max_retries=2,
         default_request_timeout=120,
+        rate_limiter=limiter,
         **extra,
     )
 
 
-class ClaudeAgents:
+class LLMAgents:
+    """The agents backed by a real chat model (Claude or Gemini, via LangChain)."""
+
     def __init__(self, settings: Settings, observability: Observability | None = None):
         self._obs = observability or Observability()
-        s = settings
-        router = chat_model(s, s.model_router, s.effort_router, 8000)
-        answer = chat_model(s, s.model_answer, s.effort_answer, 16000)
-        critic = chat_model(s, s.model_critic, s.effort_critic, 8000)
-        # json_schema = native structured outputs. The default ("function_calling")
-        # forces tool_choice, which current models reject.
+        router = chat_model(settings, "router", 8000)
+        answer = chat_model(settings, "answer", 16000)
+        critic = chat_model(settings, "critic", 8000)
+        # json_schema = native structured outputs. Anthropic's default method
+        # ("function_calling") forces tool_choice, which current Claude models reject.
         self._router = router.with_structured_output(RouteDecision, method="json_schema")
         self._drafter = answer.with_structured_output(Draft, method="json_schema")
         self._critic = critic.with_structured_output(Critique, method="json_schema")
@@ -148,6 +181,6 @@ class OfflineAgents:
 
 
 def make_agents(settings: Settings, observability: Observability | None = None) -> Agents:
-    if settings.llm_provider == "anthropic":
-        return ClaudeAgents(settings, observability)
+    if settings.llm_provider in ("anthropic", "google"):
+        return LLMAgents(settings, observability)
     return OfflineAgents()

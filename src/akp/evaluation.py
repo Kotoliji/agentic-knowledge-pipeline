@@ -66,10 +66,10 @@ class Judge(Protocol):
     ) -> Verdict: ...
 
 
-class ClaudeJudge:
+class LLMJudge:
     def __init__(self, settings: Settings, observability: Observability):
         self._obs = observability
-        model = chat_model(settings, settings.model_judge, settings.effort_judge, 16000)
+        model = chat_model(settings, "judge", 16000)
         self._model = model.with_structured_output(Verdict, method="json_schema")
 
     async def grade(self, item, answer, citations, config) -> Verdict:
@@ -223,8 +223,8 @@ async def _run(args: argparse.Namespace) -> None:
     settings = get_settings()
     obs = Observability.from_settings(settings)
     graph = build_eval_graph(settings, obs)
-    real = settings.llm_provider == "anthropic"
-    judge: Judge = ClaudeJudge(settings, obs) if real else HeuristicJudge()
+    real = settings.llm_provider != "offline"
+    judge: Judge = LLMJudge(settings, obs) if real else HeuristicJudge()
     items = load_items()[: args.limit]
     run_name = f"{datetime.now():%Y%m%d-%H%M%S}-{settings.llm_provider}"
 

@@ -2,11 +2,11 @@ import pytest
 
 from akp.agents import OfflineAgents
 from akp.evaluation import (
-    ClaudeJudge,
     EvalItem,
     EvalRecord,
     HeuristicJudge,
     HumanLabel,
+    LLMJudge,
     Verdict,
     agreement,
     cohen_kappa,
@@ -89,6 +89,6 @@ def test_agreement_reports_disagreements_and_ignores_unlabelled():
     assert report["faithful"]["agreement"] == 1.0
 
 
-def test_claude_judge_wires_up_without_calling_the_api(monkeypatch, settings):
+def test_llm_judge_wires_up_without_calling_the_api(monkeypatch, settings):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
-    ClaudeJudge(settings, Observability())
+    LLMJudge(settings.model_copy(update={"llm_provider": "anthropic"}), Observability())
