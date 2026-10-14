@@ -1,0 +1,19 @@
+{
+  "graded_items": 30,
+  "errored_items": 0,
+  "correct": 0.967,
+  "faithful": 1.0,
+  "correct_on_answerable": 0.958,
+  "correct_decline_on_unanswerable": 1.0,
+  "needed_second_retrieval": 5,
+  "statuses": {
+    "answered": 23,
+    "insufficient_evidence": 7
+  },
+  "config": {
+    "agents": "gemini-3.1-flash-lite",
+    "judge": "gemini-3.5-flash-lite",
+    "embeddings": "hash (lexical)",
+    "date": "2026-10-14"
+  }
+}

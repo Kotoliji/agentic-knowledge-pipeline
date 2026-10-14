@@ -1,0 +1,51 @@
+{
+  "hash1024": {
+    "dataset": {
+      "questions": 24,
+      "recall@1": 0.875,
+      "recall@4": 1.0,
+      "mrr": 0.927,
+      "not_first": [
+        "dep-04",
+        "tim-01",
+        "tim-02"
+      ]
+    },
+    "paraphrases": {
+      "questions": 13,
+      "recall@1": 0.462,
+      "recall@4": 0.692,
+      "mrr": 0.552,
+      "not_first": [
+        "par-01",
+        "par-02",
+        "par-03",
+        "par-04",
+        "par-06",
+        "par-07",
+        "par-08"
+      ]
+    }
+  },
+  "bge-small-en-v1.5": {
+    "dataset": {
+      "questions": 24,
+      "recall@1": 0.958,
+      "recall@4": 1.0,
+      "mrr": 0.972,
+      "not_first": [
+        "dep-03"
+      ]
+    },
+    "paraphrases": {
+      "questions": 13,
+      "recall@1": 0.846,
+      "recall@4": 1.0,
+      "mrr": 0.897,
+      "not_first": [
+        "par-02",
+        "par-03"
+      ]
+    }
+  }
+}
