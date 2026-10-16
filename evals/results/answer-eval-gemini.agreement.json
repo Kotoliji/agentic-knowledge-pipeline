@@ -1,0 +1,19 @@
+{
+  "labelled_items": 30,
+  "correct": {
+    "agreement": 1.0,
+    "cohen_kappa": 1.0,
+    "human_no": 1,
+    "judge_yes_human_no": 0,
+    "judge_no_human_yes": 0,
+    "disagreements": []
+  },
+  "faithful": {
+    "agreement": 1.0,
+    "cohen_kappa": null,
+    "human_no": 0,
+    "judge_yes_human_no": 0,
+    "judge_no_human_yes": 0,
+    "disagreements": []
+  }
+}

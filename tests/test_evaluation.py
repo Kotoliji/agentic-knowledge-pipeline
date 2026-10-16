@@ -58,7 +58,7 @@ async def test_offline_run_over_the_whole_dataset(loaded_store, settings):
     [
         ([(True, True), (False, False)] * 5, 1.0),
         ([(True, False), (False, True)] * 5, -1.0),
-        ([(True, True)] * 10, 1.0),
+        ([(True, True)] * 10, None),  # no negatives on either side: undefined
         # 20 items: both say yes 14 times, both no 2, disagree 4 -> po=0.8, pe=0.68
         (
             [(True, True)] * 14 + [(False, False)] * 2 + [(True, False)] * 2 + [(False, True)] * 2,
@@ -67,7 +67,8 @@ async def test_offline_run_over_the_whole_dataset(loaded_store, settings):
     ],
 )
 def test_cohen_kappa(pairs, expected):
-    assert cohen_kappa(pairs) == pytest.approx(expected)
+    kappa = cohen_kappa(pairs)
+    assert kappa is None if expected is None else kappa == pytest.approx(expected)
 
 
 def _record(item_id: str, correct: bool, faithful: bool) -> EvalRecord:

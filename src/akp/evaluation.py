@@ -243,14 +243,16 @@ def retrieval_metrics(store, items: list[RetrievalItem], k: int = 4, depth: int 
     }
 
 
-def cohen_kappa(pairs: list[tuple[bool, bool]]) -> float:
+def cohen_kappa(pairs: list[tuple[bool, bool]]) -> float | None:
+    """None when undefined: if both raters gave one and the same label to every item,
+    chance agreement is 1 and kappa is 0/0, so it says nothing about the judge."""
     n = len(pairs)
     observed = sum(a == b for a, b in pairs) / n
     p_a = sum(a for a, _ in pairs) / n
     p_b = sum(b for _, b in pairs) / n
     expected = p_a * p_b + (1 - p_a) * (1 - p_b)
     if expected == 1:
-        return 1.0 if observed == 1 else 0.0
+        return None
     return (observed - expected) / (1 - expected)
 
 
@@ -266,7 +268,8 @@ def agreement(records: list[EvalRecord], labels: list[HumanLabel]) -> dict:
             continue
         report[criterion] = {
             "agreement": round(sum(a == b for a, b in pairs) / len(pairs), 3),
-            "cohen_kappa": round(cohen_kappa(pairs), 3),
+            "cohen_kappa": None if (kappa := cohen_kappa(pairs)) is None else round(kappa, 3),
+            "human_no": sum(not b for _, b in pairs),
             "judge_yes_human_no": sum(a and not b for a, b in pairs),
             "judge_no_human_yes": sum(b and not a for a, b in pairs),
             "disagreements": [

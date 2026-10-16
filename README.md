@@ -72,8 +72,15 @@ lexical embeddings at the time of the run):
 The one miss is the only question that needs inference rather than lookup
 ("hotel limit in Tokyo": the policy names four cities with a higher limit, so Tokyo gets
 the default). The lite model declined; `gemini-3.5-flash` answered it correctly in a
-manual run. The judge's verdicts are not yet compared with human labels for this run, so
-treat the judge-based numbers as unvalidated until `agreement` is reported.
+manual run.
+
+**Judge vs human.** All 30 answers were labelled by hand without seeing the judge's
+verdicts ([labels](evals/results/answer-eval-gemini.human-labels.jsonl),
+[report](evals/results/answer-eval-gemini.agreement.json)). The judge agreed on every
+item for both criteria. That is weaker evidence than it sounds: correctness had a single
+negative example (kappa 1.0 rests on it), and every answer was rated faithful by both, so
+kappa is undefined there. This dataset shows the judge doesn't flag good answers; it
+doesn't yet show it catches bad ones.
 
 **Retrieval** (document-level, no LLM involved; 24 dataset questions plus 13 paraphrases
 written to avoid the documents' wording):
